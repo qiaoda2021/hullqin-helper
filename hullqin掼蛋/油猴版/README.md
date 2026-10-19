@@ -28,6 +28,9 @@
 
 1. 浏览器安装 [Tampermonkey](https://www.tampermonkey.net/)（或 Violentmonkey）
 2. 任选一种安装方式：
+   - **从 GitHub 一键安装**：打开
+     `https://raw.githubusercontent.com/qiaoda2021/hullqin-helper/main/hullqin掼蛋/油猴版/掼蛋AI助手.user.js`
+     Tampermonkey 会弹出安装页 → 点「安装」（项目主页见 [qiaoda2021/hullqin-helper](https://github.com/qiaoda2021/hullqin-helper)）；
    - **拖拽**：把本目录的 `掼蛋AI助手.user.js` 直接拖进浏览器窗口 → Tampermonkey 跳到安装页 → 点「安装」；
    - **从文件导入**：Tampermonkey 图标 → 管理面板 → 实用工具（Utilities）→「从文件导入」→ 选 `掼蛋AI助手.user.js`；
    - **地址栏**：新标签打开 `file:///D:/下载/hullqin-helper-main/hullqin掼蛋/油猴版/掼蛋AI助手.user.js`。

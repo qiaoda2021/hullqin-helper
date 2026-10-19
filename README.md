@@ -3,6 +3,8 @@
 [game.hullqin.cn（桌游合集）](https://game.hullqin.cn) 的六个油猴 AI 助手 + 整合版，外加一个独立离线的掼蛋离线版。
 所有助手只读取页面状态、模拟点击，不拦截网络——服务器视角等同正常人类操作。朋友间娱乐使用。
 
+> 仓库地址：[github.com/qiaoda2021/hullqin-helper](https://github.com/qiaoda2021/hullqin-helper) · 各助手脚本也可直接从 GitHub 安装（见各目录 README）
+
 ## 助手一览
 
 | 目录 | 游戏 | 功能亮点 | 引擎 |
