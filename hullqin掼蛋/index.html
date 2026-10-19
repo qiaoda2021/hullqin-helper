@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="dark" />
+  <title>掼蛋 AI 助手 · 记牌器</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="toast-root" class="toast-root" aria-live="polite" aria-atomic="false"></div>
+
+  <!-- ================= 顶栏 ================= -->
+  <header class="topbar">
+    <div class="brand">🃏 <span>掼蛋 AI 助手</span><span class="brand-sub">· 记牌器</span></div>
+    <div class="topbar-controls">
+      <label class="field-inline" for="level-select">级牌
+        <select id="level-select" class="select" title="当前级牌：决定大小顺序与逢人配"></select>
+      </label>
+      <label class="field-inline" for="seat-select">我的座位
+        <select id="seat-select" class="select" title="我在牌桌中的位置（0=1号位）">
+          <option value="0">我是1号位</option>
+          <option value="1">我是2号位</option>
+          <option value="2">我是3号位</option>
+          <option value="3">我是4号位</option>
+        </select>
+      </label>
+      <div class="topbar-buttons">
+        <button type="button" class="btn ghost" id="btn-new-round" title="清空手牌与出牌记录，保留级牌、座位和设置">🔄 新一局</button>
+        <button type="button" class="btn ghost" id="btn-settings" title="配置 DeepSeek API 与模型参数">⚙️ 设置</button>
+        <button type="button" class="btn ghost" id="btn-help" title="牌型 / 大小 / 逢人配 / 炸弹速查">❓ 规则帮助</button>
+      </div>
+    </div>
+  </header>
+
+  <div id="module-banner" class="module-banner" hidden></div>
+
+  <!-- ================= 主布局 ================= -->
+  <main class="layout">
+
+    <!-- 记牌器 -->
+    <section class="panel panel-counter" id="panel-counter" aria-labelledby="counter-title">
+      <div class="panel-head">
+        <h2 class="panel-title" id="counter-title">📊 记牌器</h2>
+        <span class="panel-sub" id="counter-summary">加载中…</span>
+      </div>
+      <div class="counter-grid" id="counter-grid"></div>
+      <div class="counter-warnings" id="counter-warnings" hidden></div>
+      <p class="panel-tip">格子里的数字是「其他玩家手中未知张数」。鼠标悬浮可查看总张数 / 已出 / 我手；金色为级牌，♥ 配为逢人配。</p>
+    </section>
+
+    <!-- 我的手牌 -->
+    <section class="panel panel-hand" id="panel-hand" aria-labelledby="hand-title">
+      <div class="panel-head">
+        <h2 class="panel-title" id="hand-title">🖐️ 我的手牌</h2>
+        <span class="panel-sub" id="hand-count">0 张</span>
+      </div>
+      <div class="hand-cards" id="hand-cards"></div>
+      <div class="empty-hint" id="hand-empty">还没有录入手牌。点击「编辑手牌」逐张选择，或点「随机示例」发一副演示手牌。</div>
+      <div class="hand-stats" id="hand-stats"></div>
+      <div class="panel-actions">
+        <button type="button" class="btn primary" id="btn-edit-hand">✏️ 编辑手牌</button>
+        <button type="button" class="btn ghost" id="btn-deal-demo">🎲 随机示例</button>
+      </div>
+    </section>
+
+    <!-- AI 出牌建议 -->
+    <section class="panel panel-ai" id="panel-ai" aria-labelledby="ai-title">
+      <div class="panel-head">
+        <h2 class="panel-title" id="ai-title">🤖 AI 出牌建议</h2>
+        <span class="level-badge" id="ai-level-badge">级牌 —</span>
+      </div>
+
+      <div class="ai-meta">
+        <div class="ai-meta-row">
+          <span class="ai-meta-label">上一手</span>
+          <div class="ai-meta-value" id="ai-lastplay">—</div>
+        </div>
+        <div class="ai-meta-row">
+          <span class="ai-meta-label">各家剩余</span>
+          <div class="seat-chips" id="ai-seats"></div>
+        </div>
+      </div>
+
+      <div class="panel-actions">
+        <button type="button" class="btn primary" id="btn-local-suggest" title="使用本地启发式引擎生成建议">💡 本地建议</button>
+        <button type="button" class="btn deepseek" id="btn-deepseek-suggest" title="调用 DeepSeek API 生成建议">🤖 DeepSeek 建议</button>
+      </div>
+
+      <div class="ai-loading" id="ai-loading" hidden>
+        <span class="spinner"></span><span id="ai-loading-text">正在请求 DeepSeek…</span>
+      </div>
+
+      <div class="ai-result" id="ai-result" hidden>
+        <div class="ai-result-head">
+          <span class="source-badge local" id="ai-source-badge">本地引擎</span>
+          <span class="ai-result-title" id="ai-result-title">建议</span>
+        </div>
+        <div class="ai-result-cards" id="ai-result-cards"></div>
+        <div class="ai-result-reason" id="ai-result-reason"></div>
+        <div class="ai-result-error" id="ai-result-error" hidden></div>
+        <details class="ai-candidates" id="ai-candidates" hidden>
+          <summary>候选出牌（按评分排序）</summary>
+          <div class="cand-list" id="ai-cand-list"></div>
+        </details>
+        <details class="ai-raw" id="ai-raw-wrap" hidden>
+          <summary>DeepSeek 原始返回</summary>
+          <pre id="ai-raw"></pre>
+        </details>
+        <div class="panel-actions">
+          <button type="button" class="btn primary" id="btn-adopt">✅ 采用并记录</button>
+          <button type="button" class="btn ghost" id="btn-copy">📋 复制牌面</button>
+        </div>
+      </div>
+
+      <p class="panel-tip" id="ai-tip">DeepSeek 建议需要先在「设置」中填写 API Key。</p>
+    </section>
+
+    <!-- 出牌记录 -->
+    <section class="panel panel-history" id="panel-history" aria-labelledby="history-title">
+      <div class="panel-head">
+        <h2 class="panel-title" id="history-title">📜 出牌记录</h2>
+        <span class="panel-sub" id="history-count">0 手</span>
+      </div>
+      <div class="history-list" id="history-list"></div>
+      <div class="empty-hint" id="history-empty">还没有出牌记录。点击「记录出牌」开始记录牌局。</div>
+      <div class="panel-actions">
+        <button type="button" class="btn primary" id="btn-record">➕ 记录出牌</button>
+        <button type="button" class="btn ghost" id="btn-undo">↩️ 撤销上一手</button>
+        <button type="button" class="btn danger" id="btn-clear">🗑️ 清空记录</button>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- ================= 记录出牌弹窗 ================= -->
+  <div class="modal-backdrop" id="modal-record" hidden>
+    <div class="modal modal-lg" role="dialog" aria-modal="true" aria-labelledby="record-title">
+      <div class="modal-head">
+        <h3 id="record-title">记录出牌</h3>
+        <button type="button" class="icon-btn" data-close="modal-record" aria-label="关闭">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="record-toolbar">
+          <label class="field-inline" for="record-seat">座位
+            <select id="record-seat" class="select"></select>
+          </label>
+          <label class="checkbox-inline"><input type="checkbox" id="record-pass" /> 本手「过」（不出牌）</label>
+          <span class="hint" id="record-hint"></span>
+        </div>
+        <div class="picker" id="record-picker"></div>
+        <div class="picker-foot">
+          <div class="picker-selected" id="record-selected-cards"></div>
+          <div class="picker-info" id="record-selected-info">已选 0 张</div>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button type="button" class="btn ghost" id="record-clear-sel">清空选择</button>
+        <span class="flex-spacer"></span>
+        <button type="button" class="btn ghost" data-close="modal-record">取消</button>
+        <button type="button" class="btn primary" id="record-confirm">确定记录</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= 编辑手牌弹窗 ================= -->
+  <div class="modal-backdrop" id="modal-hand" hidden>
+    <div class="modal modal-lg" role="dialog" aria-modal="true" aria-labelledby="hand-modal-title">
+      <div class="modal-head">
+        <h3 id="hand-modal-title">编辑我的手牌</h3>
+        <button type="button" class="icon-btn" data-close="modal-hand" aria-label="关闭">✕</button>
+      </div>
+      <div class="modal-body">
+        <p class="modal-hint">点选你手中的牌（每人 27 张，两副牌共 108 张）。已经记录出过的牌会置灰，不能重复选择；确定后手牌会按点数排序。</p>
+        <div class="picker" id="hand-picker"></div>
+        <div class="picker-foot">
+          <div class="picker-selected" id="hand-selected-cards"></div>
+          <div class="picker-info" id="hand-selected-info">已选 0 张</div>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button type="button" class="btn ghost" id="hand-clear-sel">清空选择</button>
+        <span class="flex-spacer"></span>
+        <button type="button" class="btn ghost" data-close="modal-hand">取消</button>
+        <button type="button" class="btn primary" id="hand-confirm">确定</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= 设置弹窗 ================= -->
+  <div class="modal-backdrop" id="modal-settings" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+      <div class="modal-head">
+        <h3 id="settings-title">设置 · DeepSeek</h3>
+        <button type="button" class="icon-btn" data-close="modal-settings" aria-label="关闭">✕</button>
+      </div>
+      <div class="modal-body">
+        <p class="modal-hint">API Key 只保存在本机浏览器的 localStorage（键名 <code>gdAI.settings</code>），不会上传到除 DeepSeek 官方接口以外的任何地方。清除浏览器数据会一并删除。</p>
+        <div class="form-grid">
+          <label class="form-field" for="setting-api-key">
+            <span>DeepSeek API Key</span>
+            <div class="key-row">
+              <input type="password" id="setting-api-key" class="input" placeholder="sk-…" autocomplete="off" spellcheck="false" />
+              <button type="button" class="icon-btn" id="btn-toggle-key" title="显示 / 隐藏 Key">👁</button>
+            </div>
+            <small class="field-hint">未填写 Key 时只能使用本地建议；DeepSeek 请求失败会自动回退本地建议。</small>
+          </label>
+          <label class="form-field" for="setting-base-url">
+            <span>Base URL</span>
+            <input type="text" id="setting-base-url" class="input" placeholder="https://api.deepseek.com" spellcheck="false" />
+            <small class="field-hint">默认 https://api.deepseek.com，通常无需修改。</small>
+          </label>
+          <label class="form-field" for="setting-model">
+            <span>模型</span>
+            <select id="setting-model" class="select">
+              <option value="deepseek-chat">deepseek-chat（默认，响应快）</option>
+              <option value="deepseek-reasoner">deepseek-reasoner（推理更强，较慢）</option>
+            </select>
+          </label>
+          <div class="form-two">
+            <label class="form-field" for="setting-temperature">
+              <span>温度（0 ~ 2）</span>
+              <input type="number" id="setting-temperature" class="input" min="0" max="2" step="0.1" placeholder="0.2" />
+            </label>
+            <label class="form-field" for="setting-timeout">
+              <span>超时（毫秒）</span>
+              <input type="number" id="setting-timeout" class="input" min="3000" max="120000" step="1000" placeholder="30000" />
+            </label>
+          </div>
+        </div>
+        <div class="settings-status" id="settings-status" role="status"></div>
+      </div>
+      <div class="modal-foot">
+        <button type="button" class="btn danger" id="btn-clear-key">清除 Key</button>
+        <span class="flex-spacer"></span>
+        <button type="button" class="btn ghost" data-close="modal-settings">关闭</button>
+        <button type="button" class="btn ghost" id="btn-test-connection">测试连接</button>
+        <button type="button" class="btn primary" id="btn-save-settings">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= 规则帮助弹窗 ================= -->
+  <div class="modal-backdrop" id="modal-help" hidden>
+    <div class="modal modal-lg" role="dialog" aria-modal="true" aria-labelledby="help-title">
+      <div class="modal-head">
+        <h3 id="help-title">掼蛋规则速查</h3>
+        <button type="button" class="icon-btn" data-close="modal-help" aria-label="关闭">✕</button>
+      </div>
+      <div class="modal-body">
+        <section class="help-section">
+          <h4>牌型</h4>
+          <table class="help-table">
+            <thead><tr><th>牌型</th><th>张数</th><th>说明</th></tr></thead>
+            <tbody>
+              <tr><td>单张</td><td>1</td><td>任意一张牌</td></tr>
+              <tr><td>对子</td><td>2</td><td>两张同点数；两张小王 / 两张大王也可</td></tr>
+              <tr><td>三同张</td><td>3</td><td>三张同点数</td></tr>
+              <tr><td>三带二</td><td>5</td><td>三张 + 一对（只比三张的点数）</td></tr>
+              <tr><td>顺子</td><td>5</td><td>连续 5 张单牌，A 可作 1 或 14</td></tr>
+              <tr><td>三连对</td><td>6</td><td>3 个连续对子</td></tr>
+              <tr><td>钢板</td><td>6</td><td>2 个连续三张</td></tr>
+              <tr><td>炸弹</td><td>4 ~ 10</td><td>4 张及以上同点数</td></tr>
+              <tr><td>同花顺</td><td>5</td><td>同花色顺子，属于炸弹</td></tr>
+              <tr><td>四大天王</td><td>4</td><td>2 张大王 + 2 张小王，最大</td></tr>
+            </tbody>
+          </table>
+        </section>
+
+        <section class="help-section">
+          <h4>大小顺序</h4>
+          <p class="help-note">单牌大小：大王 &gt; 小王 &gt; <strong>级牌</strong> &gt; A &gt; K &gt; Q &gt; J &gt; 10 &gt; … &gt; 2。非炸弹只能「同牌型、同张数、点数更大」才能压过上一手；炸弹可以压任意非炸弹，炸弹之间按炸弹等级比较。</p>
+        </section>
+
+        <section class="help-section">
+          <h4>逢人配（红桃级牌）</h4>
+          <ul class="help-list">
+            <li>红桃级牌可以在多张牌组合里当任意<strong>非王</strong>的牌使用（任意点数、任意花色）。</li>
+            <li>单出红桃级牌时，只按「级牌单张」计算。</li>
+            <li>有多种配法时，默认取<strong>最大牌型 / 最大点数</strong>的解读（如级牌 5：♥5+6+7+8+9 默认配成 6-10 顺子）。</li>
+            <li>炸弹可以用逢人配补足，例如 3+3+♥5+♥5（级牌 5）= 3333。</li>
+          </ul>
+        </section>
+
+        <section class="help-section">
+          <h4>炸弹体系</h4>
+          <p class="help-note">4 炸 &lt; 5 炸 &lt; 同花顺 &lt; 6 炸 &lt; 7 炸 &lt; 8 炸 &lt; 9 炸 &lt; 10 炸 &lt; 四大天王。同张数的炸弹先比张数，再比点数；级牌组成的炸弹在同张数炸弹中最大。</p>
+        </section>
+
+        <section class="help-section">
+          <h4>使用步骤</h4>
+          <ol class="help-list">
+            <li>在顶栏选择<strong>级牌</strong>和<strong>我的座位</strong>（座位 0=1号位，1=2号位，2=3号位，3=4号位）。</li>
+            <li>在「我的手牌」点「编辑手牌」录入 27 张牌（或点「随机示例」演示）。</li>
+            <li>牌局中每次出牌后点「记录出牌」：选座位 + 选牌，或勾选「本手过」。</li>
+            <li>需要建议时点「💡 本地建议」或「🤖 DeepSeek 建议」（后者需在设置里填 API Key）。</li>
+            <li>建议满意时点「采用并记录」，会直接写入出牌记录并扣除手牌。</li>
+            <li>「新一局」清空手牌与记录，保留级牌、座位和设置。所有状态自动保存在本机。</li>
+          </ol>
+        </section>
+      </div>
+      <div class="modal-foot">
+        <span class="flex-spacer"></span>
+        <button type="button" class="btn primary" data-close="modal-help">知道了</button>
+      </div>
+    </div>
+  </div>
+
+  <noscript><div class="noscript">本工具需要启用 JavaScript 才能使用。</div></noscript>
+
+  <!-- 模块按依赖顺序加载（普通 script，file:// 可开） -->
+  <script src="gd.core.js"></script>
+  <script src="gd.ai.js"></script>
+  <script src="gd.deepseek.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

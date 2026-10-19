@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>掼蛋 AI 助手 · 油猴版端到端夹具（独立验收）</title>
+<style>
+  body { font: 13px/1.5 sans-serif; margin: 8px; }
+  #fixture-result { background: #f5f5f5; border: 1px solid #ccc; padding: 8px; white-space: pre-wrap; }
+  #fixture-log { color: #666; white-space: pre-wrap; font-size: 11px; }
+</style>
+</head>
+<body>
+
+<pre id="fixture-result">PENDING</pre>
+<pre id="fixture-log"></pre>
+
+<!-- 假站点 DOM：手牌 + 出牌/不出/确认进贡/确认还贡（点击由 _fixture.setup.js 计数） -->
+<div id="fixture-game">
+  <div class="ddz-poker-list" id="fixture-hand"></div>
+  <div id="fixture-buttons" style="margin-top:8px">
+    <button type="button" id="fixture-btn-play">😎 出牌</button>
+    <button type="button" id="fixture-btn-pass">😭 不出</button>
+    <button type="button" id="fixture-btn-tribute">确认进贡</button>
+    <button type="button" id="fixture-btn-return">确认还贡</button>
+  </div>
+</div>
+
+<!-- 1) 先加载规则引擎（用于编码 raw 对局）；2) 搭假 DOM/假 fiber/假 fetch；3) 加载构建产物；4) 断言 -->
+<script src="gd.site.core.js"></script>
+<script src="_fixture.setup.js"></script>
+<script src="掼蛋AI助手.user.js"></script>
+<script src="_fixture.test.js"></script>
+<script>
+  // 兜底：若 15s（虚拟时间）内夹具未产出结果，写失败结果，避免 --dump-dom 只看到 PENDING
+  setTimeout(function () {
+    if (window.__fixtureDone) return;
+    var pre = document.getElementById('fixture-result');
+    if (pre && /PENDING/.test(pre.textContent)) {
+      pre.textContent = 'PASS 0 / FAIL 1\n✗ 夹具 15s 内未完成（页面挂起或脚本报错，见 #fixture-log）';
+    }
+  }, 15000);
+</script>
+
+</body>
+</html>

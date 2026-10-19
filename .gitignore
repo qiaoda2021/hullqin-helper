@@ -1,0 +1,26 @@
+# 系统与工具
+.zcode/
+node_modules/
+*.log
+*.err.log
+.DS_Store
+Thumbs.db
+
+# 测试产物（自对弈/对比赛输出）
+hullqin斗兽棋/results-*/
+hullqin斗兽棋/compare-*/
+_rev/
+
+# Python 缓存
+__pycache__/
+*.pyc
+
+# 站点源码逆向产物（含第三方版权代码，不发布）
+_site/
+_publish/
+*.zip
+
+# 临时 dump / 恢复文件
+_dump*.html
+_dump*.err
+_recover_*
