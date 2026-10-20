@@ -3,7 +3,7 @@
  * 掼蛋油猴版聚合测试入口 gd.test.js
  * 依次运行各 Node 测试文件，汇总 PASS/FAIL，全部通过退出码 0（全程不联网）。
  * 运行：node gd.test.js
- * 只跑某个：node gd.test.js core|ai|remote|ui|verify|all
+ * 只跑某个：node gd.test.js core|esp|ai|remote|ui|verify|all
  * 端到端夹具（假 fiber + Edge headless）见 README「测试」一节，不在本入口内。
  */
 'use strict';
@@ -14,6 +14,7 @@ const { spawnSync } = require('child_process');
 const ROOT = __dirname;
 const SUITES = [
   { key: 'core', file: 'gd.site.core.test.js', title: '站点规则引擎 gd.site.core.js' },
+  { key: 'esp', file: 'gd.site.esp.test.js', title: '透视数据 gd.site.esp.js' },
   { key: 'ai', file: 'gd.site.ai.test.js', title: '本地 AI 建议 gd.site.ai.js' },
   { key: 'remote', file: 'gd.site.remote.test.js', title: 'DeepSeek 适配 gd.site.remote.js' },
   { key: 'ui', file: 'gd.site.ui.test.js', title: '面板 UI gd.site.ui.js' },

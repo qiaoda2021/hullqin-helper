@@ -1383,13 +1383,15 @@ function sec12() {
   ok(/@match\s+https:\/\/game\.hullqin\.cn\/\*/.test(src), '12 头含 @match https://game.hullqin.cn/*');
   ok(/@grant\s+none/.test(src), '12 头含 @grant none');
   const idx = {};
-  for (const name of ['GDDeepSeek', 'GDSite', 'GDSiteAI', 'GDSiteRemote', 'GDSiteUI']) {
+  for (const name of ['GDDeepSeek', 'GDSite', 'GDSiteESP', 'GDSiteAI', 'GDSiteRemote', 'GDSiteUI']) {
     const p = firstAssign(src, name);
     idx[name] = p >= 0 ? p : src.search(new RegExp('\\b' + name + '\\b'));
     ok(idx[name] >= 0, '12 产物包含模块 ' + name);
   }
   // SPEC2 §7 只要求「模块顺序：GDSite 定义在 GDSiteAI/GDSiteRemote/GDSiteUI 之前」，
   // 未要求 GDDeepSeek 的位置（build 顺序把 GDDeepSeek 放在 core 之后也可）。
+  ok(idx.GDSite < idx.GDSiteESP, '12 模块顺序：GDSite 定义在 GDSiteESP 之前');
+  ok(idx.GDSiteESP < idx.GDSiteAI, '12 模块顺序：GDSiteESP 定义在 GDSiteAI 之前');
   ok(idx.GDSite < idx.GDSiteAI, '12 模块顺序：GDSite 定义在 GDSiteAI 之前');
   ok(idx.GDSite < idx.GDSiteRemote, '12 模块顺序：GDSite 定义在 GDSiteRemote 之前');
   ok(idx.GDSite < idx.GDSiteUI, '12 模块顺序：GDSite 定义在 GDSiteUI 之前');

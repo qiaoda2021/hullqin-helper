@@ -47,6 +47,7 @@
     temperature: 0.2,
     timeoutMs: 30000,
     auto: false,
+    xray: false,
   };
 
   const MODEL_OPTIONS = ['deepseek-chat', 'deepseek-reasoner'];
@@ -212,6 +213,57 @@
       hasKey: !!s.hasKey,
       model: str(s.model) || DEFAULT_SETTINGS.model,
       baseUrl: str(s.baseUrl) || DEFAULT_SETTINGS.baseUrl,
+      xray: !!s.xray,
+    };
+  }
+
+  function normXrayCard(raw) {
+    if (!raw || typeof raw !== 'object') return null;
+    return {
+      id: num(raw.id, 0),
+      text: str(raw.text),
+      red: !!raw.red,
+      isLevel: !!raw.isLevel,
+      isWild: !!raw.isWild,
+      isJoker: !!raw.isJoker,
+    };
+  }
+
+  function normXrayBomb(raw) {
+    if (!raw || typeof raw !== 'object') return null;
+    return {
+      kind: str(raw.kind),
+      size: num(raw.size, 0),
+      label: str(raw.label) || '炸弹',
+      power: num(raw.power, 0),
+    };
+  }
+
+  function normXraySeat(raw) {
+    const s = raw && typeof raw === 'object' ? raw : {};
+    return {
+      seat: num(s.seat, 0),
+      name: str(s.name),
+      isPartner: !!s.isPartner,
+      count: num(s.count, 0),
+      cards: Array.isArray(s.cards) ? s.cards.map(normXrayCard).filter(Boolean) : [],
+      bombs: Array.isArray(s.bombs) ? s.bombs.map(normXrayBomb).filter(Boolean) : [],
+      wildCount: num(s.wildCount, 0),
+      unavailable: !!s.unavailable,
+    };
+  }
+
+  function normXray(raw) {
+    const x = raw && typeof raw === 'object' ? raw : {};
+    return {
+      enabled: !!x.enabled,
+      seats: Array.isArray(x.seats) ? x.seats.map(normXraySeat) : [],
+      warnings: Array.isArray(x.warnings)
+        ? x.warnings.filter(function (t) { return typeof t === 'string' && t; })
+        : [],
+      note: str(x.note),
+      totalCards: num(x.totalCards, 0),
+      bombCount: num(x.bombCount, 0),
     };
   }
 
@@ -235,6 +287,7 @@
       history: Array.isArray(s.history) ? s.history : [],
       suggestion: normSuggestion(s.suggestion),
       tribute: normTribute(s.tribute),
+      xray: normXray(s.xray),
       busy: !!s.busy,
       auto: s.auto === undefined ? undefined : !!s.auto,
       settings: normSettings(s.settings),
@@ -374,6 +427,32 @@
     '.hqgd-overlay .hqgd-help-note{font-size:10px;color:#64748b;line-height:1.5;margin-top:2px}',
     '.hqgd-overlay .hqgd-kbd{display:inline-block;background:#1e293b;border:1px solid #334155;',
     'border-radius:4px;padding:0 3px;font-size:10px;color:#cbd5e1}',
+    /* ---- 透视（仅本机可见） ---- */
+    '#hqgd-panel .hqgd-xray-head{display:flex;align-items:center;gap:6px;margin-bottom:4px}',
+    '#hqgd-panel .hqgd-xray-toggle{cursor:pointer;border:1px solid #334155;border-radius:6px;',
+    'padding:2px 7px;font:inherit;font-size:10px;line-height:1.5;background:#1e293b;color:#94a3b8;',
+    'white-space:nowrap;transition:background .12s,color .12s}',
+    '#hqgd-panel .hqgd-xray-toggle:hover{background:#334155;color:#e2e8f0}',
+    '#hqgd-panel .hqgd-xray-toggle.hqgd-on{background:#7c2d12;border-color:#ea580c;color:#fed7aa;font-weight:700}',
+    '#hqgd-panel .hqgd-xray-note{font-size:9.5px;line-height:1.5;color:#7c8ba1;margin-bottom:4px}',
+    '#hqgd-panel .hqgd-xray-seat{border:1px solid #1e293b;border-radius:7px;padding:4px 6px;',
+    'margin-bottom:4px;background:#111c30}',
+    '#hqgd-panel .hqgd-xray-seat.hqgd-xray-partner{border-color:#155e75}',
+    '#hqgd-panel .hqgd-xray-seat-head{display:flex;align-items:center;gap:5px;flex-wrap:wrap}',
+    '#hqgd-panel .hqgd-xray-seat-name{font-size:10.5px;font-weight:700;color:#cbd5e1}',
+    '#hqgd-panel .hqgd-xray-seat-count{font-size:10px;color:#94a3b8;margin-left:auto}',
+    '#hqgd-panel .hqgd-xray-tag{font-size:9px;line-height:1.4;padding:0 3px;border-radius:4px;',
+    'background:#083344;border:1px solid #155e75;color:#67e8f9}',
+    '#hqgd-panel .hqgd-xray-chip{display:inline-block;font-size:10px;line-height:1.45;padding:0 3px;',
+    'margin:1px 2px 1px 0;border-radius:4px;background:#1e293b;border:1px solid #334155;color:#e2e8f0}',
+    '#hqgd-panel .hqgd-xray-chip.hqgd-xray-red{color:#f87171}',
+    '#hqgd-panel .hqgd-xray-chip.hqgd-xray-level{background:#3b2f0b;border-color:#a16207;color:#fde68a}',
+    '#hqgd-panel .hqgd-xray-chip.hqgd-xray-wild{background:#3b0f3a;border-color:#c026d3;color:#f5d0fe;font-weight:700}',
+    '#hqgd-panel .hqgd-xray-chip.hqgd-xray-joker{background:#1e1b4b;border-color:#6366f1;color:#c7d2fe}',
+    '#hqgd-panel .hqgd-xray-bomb{font-size:9.5px;line-height:1.45;padding:0 4px;border-radius:4px;',
+    'background:#7f1d1d;border:1px solid #b91c1c;color:#fecaca}',
+    '#hqgd-panel .hqgd-xray-empty{font-size:10px;color:#64748b;line-height:1.5;padding:2px 1px}',
+    '#hqgd-panel .hqgd-xray-sum{font-size:9.5px;color:#64748b;line-height:1.5;margin-top:2px;word-break:break-all}',
   ].join('');
 
   /* ============================================================
@@ -431,6 +510,7 @@
     let lastSnapshot = null;
     let lastSuggestion = null;
     let autoPending = null; // 本地先反馈自动托管开关，下一次 snapshot 到达后以 body 为准
+    let xrayPending = null; // 本地先反馈透视开关，下一次 snapshot 到达后以 body 为准
     let settings = mergeSettings(DEFAULT_SETTINGS, opts.settings);
     let settingsUi = null; // {overlay, keyInput, ...}
     let helpUi = null;
@@ -491,6 +571,7 @@
       if (x.timeoutMs !== undefined) out.timeoutMs = num(x.timeoutMs, DEFAULT_SETTINGS.timeoutMs);
       if (x.timeout !== undefined) out.timeoutMs = num(x.timeout, out.timeoutMs);
       if (x.auto !== undefined) out.auto = !!x.auto;
+      if (x.xray !== undefined) out.xray = !!x.xray;
       return out;
     }
 
@@ -536,6 +617,21 @@
     secCounter.appendChild(counterGrid);
     secCounter.appendChild(counterSum);
 
+    const secXray = el('div', PREFIX + 'sec');
+    const xrayHead = el('div', PREFIX + 'xray-head');
+    const xrayTitle = el('span', PREFIX + 'sec-title', '👁 透视 · 对手手牌');
+    const xrayToggle = btn('透视：关', PREFIX + 'xray-toggle', function () { toggleXray(); });
+    xrayToggle.title = '透视：点击开启（仅本机可见）';
+    xrayHead.appendChild(xrayTitle);
+    xrayHead.appendChild(xrayToggle);
+    const xrayNote = el('div', PREFIX + 'xray-note', '开启后可查看其他三家手牌与炸弹预警（仅本机可见）。');
+    const xrayList = el('div', PREFIX + 'xray-list');
+    const xraySum = el('div', PREFIX + 'xray-sum', '');
+    secXray.appendChild(xrayHead);
+    secXray.appendChild(xrayNote);
+    secXray.appendChild(xrayList);
+    secXray.appendChild(xraySum);
+
     const secMy = el('div', PREFIX + 'sec');
     const myTitle = el('div', PREFIX + 'sec-title', '🙋 我的信息');
     const myInfo = el('div', PREFIX + 'myinfo', '');
@@ -571,6 +667,7 @@
 
     bodyEl.appendChild(noticeEl);
     bodyEl.appendChild(secCounter);
+    bodyEl.appendChild(secXray);
     bodyEl.appendChild(secMy);
     bodyEl.appendChild(secTable);
     bodyEl.appendChild(secTribute);
@@ -607,6 +704,88 @@
       const on_ = effectiveAuto();
       autoBtn.className = PREFIX + 'icon-btn' + (on_ ? ' ' + PREFIX + 'on' : '');
       autoBtn.title = on_ ? '自动托管：已开启（点击关闭）' : '自动托管：已关闭（点击开启）';
+    }
+
+    /* ---------- 透视（对手手牌，仅本机可见） ---------- */
+
+    function toggleXray() {
+      const next = !effectiveXray();
+      settings.xray = next;
+      xrayPending = next;
+      renderXray(lastSnapshot || normalizeSnapshot(null));
+      if (typeof opts.onToggleXray === 'function') callCb('onToggleXray', next);
+      else if (typeof opts.onSaveSettings === 'function') {
+        callCb('onSaveSettings', buildSettingsPayload({ xray: next }));
+      }
+      toast(next ? '透视已开启（仅本机可见）' : '透视已关闭');
+    }
+
+    function effectiveXray() {
+      if (xrayPending !== null) return !!xrayPending;
+      if (lastSnapshot && lastSnapshot.xray && lastSnapshot.xray.enabled !== undefined) {
+        return !!lastSnapshot.xray.enabled;
+      }
+      return !!settings.xray;
+    }
+
+    function xrayChip(c) {
+      let cls = PREFIX + 'xray-chip';
+      if (c.red) cls += ' ' + PREFIX + 'xray-red';
+      if (c.isLevel) cls += ' ' + PREFIX + 'xray-level';
+      if (c.isWild) cls += ' ' + PREFIX + 'xray-wild';
+      if (c.isJoker) cls += ' ' + PREFIX + 'xray-joker';
+      const chip = el('span', cls, c.text || '?');
+      if (c.isWild) chip.title = '逢人配（红桃级牌）';
+      else if (c.isLevel) chip.title = '级牌';
+      else if (c.isJoker) chip.title = '王';
+      return chip;
+    }
+
+    function xraySeatBlock(seat) {
+      const block = el('div', PREFIX + 'xray-seat' + (seat.isPartner ? ' ' + PREFIX + 'xray-partner' : ''));
+      const head2 = el('div', PREFIX + 'xray-seat-head');
+      head2.appendChild(el('span', PREFIX + 'xray-seat-name', (seat.name || '?') + ' · ' + seat.seat + '号位'));
+      if (seat.isPartner) head2.appendChild(el('span', PREFIX + 'xray-tag', '队友'));
+      head2.appendChild(el('span', PREFIX + 'xray-seat-count', seat.count + ' 张'));
+      for (let i = 0; i < seat.bombs.length; i++) {
+        head2.appendChild(el('span', PREFIX + 'xray-bomb', '💣 ' + (seat.bombs[i].label || '炸弹')));
+      }
+      block.appendChild(head2);
+      if (seat.unavailable) {
+        block.appendChild(el('div', PREFIX + 'xray-empty', '该家手牌未就绪（可能尚未发牌）'));
+        return block;
+      }
+      if (!seat.cards.length) {
+        block.appendChild(el('div', PREFIX + 'xray-empty', '已出完 / 无手牌'));
+        return block;
+      }
+      const cardsEl = el('div', PREFIX + 'xray-cards');
+      for (let j = 0; j < seat.cards.length; j++) cardsEl.appendChild(xrayChip(seat.cards[j]));
+      block.appendChild(cardsEl);
+      return block;
+    }
+
+    function renderXray(snap) {
+      const x = (snap && snap.xray) || normXray(null);
+      const on_ = effectiveXray();
+      xrayToggle.textContent = on_ ? '透视：开' : '透视：关';
+      xrayToggle.className = PREFIX + 'xray-toggle' + (on_ ? ' ' + PREFIX + 'on' : '');
+      xrayToggle.title = on_ ? '透视：已开启（点击关闭，仅本机可见）' : '透视：已关闭（点击开启）';
+      xrayList.textContent = '';
+      xraySum.textContent = '';
+      if (!on_) {
+        xrayNote.textContent = '透视已关闭。开启后可查看其他三家手牌与炸弹预警（仅本机可见）。';
+        return;
+      }
+      xrayNote.textContent = '⚠ 透视会破坏游戏公平性：仅本机可见，请只与朋友娱乐使用，切勿用于比赛或赌博。';
+      if (!x.seats.length) {
+        xrayList.appendChild(el('div', PREFIX + 'xray-empty', x.note || '等待发牌 / 牌局数据…'));
+        return;
+      }
+      for (let i = 0; i < x.seats.length; i++) xrayList.appendChild(xraySeatBlock(x.seats[i]));
+      const parts = ['可见 ' + (x.totalCards || 0) + ' 张'];
+      if (x.bombCount) parts.push('炸弹 ' + x.bombCount + ' 个');
+      xraySum.textContent = parts.join(' · ');
     }
 
     /* ---------- 渲染：记牌器 ---------- */
@@ -837,14 +1016,16 @@
     function render(snapRaw) {
       const snap = normalizeSnapshot(snapRaw);
       lastSnapshot = snap;
-      // body 明确给出了 auto 字段时，以 body 为准确认开关状态
+      // body 明确给出了 auto/xray 字段时，以 body 为准确认开关状态
       if (snapRaw && typeof snapRaw === 'object' && snapRaw.auto !== undefined) autoPending = null;
+      if (snapRaw && typeof snapRaw === 'object' && snapRaw.xray !== undefined) xrayPending = null;
       root.style.display = snap.visible ? '' : 'none';
       renderBadge(snap);
       refreshAutoBtn();
       const guandan = snap.isGuandan;
       const hideSections = !guandan;
       secCounter.style.display = hideSections ? 'none' : '';
+      secXray.style.display = hideSections ? 'none' : '';
       secMy.style.display = hideSections ? 'none' : '';
       secTable.style.display = hideSections ? 'none' : '';
       secSuggest.style.display = hideSections ? 'none' : '';
@@ -856,6 +1037,7 @@
         noticeEl.style.display = 'none';
         noticeEl.textContent = '';
         renderCounter(snap.counter);
+        renderXray(snap);
         renderHandInfo(snap.handInfo);
         renderTable(snap);
         renderTribute(snap.tribute);
@@ -894,6 +1076,7 @@
         temperature: settings.temperature,
         timeoutMs: settings.timeoutMs,
         auto: !!settings.auto,
+        xray: !!settings.xray,
       };
       const o = over && typeof over === 'object' ? over : {};
       for (const k in o) if (Object.prototype.hasOwnProperty.call(o, k)) out[k] = o[k];
@@ -1135,6 +1318,7 @@
       const sections = [
         ['功能', [
           '📋 记牌器：统计除我之外三家的剩余牌（未知/已出/逢人配）。',
+          '👁 透视：可开关查看其他三家手牌与炸弹预警（默认关闭，仅本机可见）。',
           '💡 本地建议：纯前端启发式，不联网也能用。',
           '🌐 DeepSeek 建议：调用 DeepSeek 官方 API，失败自动回退本地建议。',
           '⚡ 采用并出牌 / 🃏 不出：由脚本自动点击站点牌面与按钮。',
@@ -1148,6 +1332,12 @@
         ['进贡 / 还贡', [
           '进贡阶段：站点会自动预选建议贡牌，点「采纳进贡」或「确认进贡」即可。',
           '还贡阶段：需在站点允许的候选牌中选中 1 张，再点「确认还贡」。',
+        ]],
+        ['👁 透视（默认关闭）', [
+          '面板「👁 透视 · 对手手牌」右侧的「透视：关」按钮即开关；设置保存在本机 localStorage，下次自动沿用。',
+          '开启后显示其他三家手牌、剩余张数，以及炸弹预警（4 张及以上、同花顺、四大天王）。',
+          '数据来自本局页面状态的只读解码，不修改网络请求，也不影响正常出牌。',
+          '透视会破坏游戏公平性：内容仅本机显示，建议只与朋友娱乐时使用，切勿用于比赛或赌博。',
         ]],
         ['规则口径', [
           '级牌点数排 A 之上；红桃级牌为「逢人配」，可当任意牌（王除外）。',
@@ -1246,6 +1436,10 @@
       formatHandInfo: formatHandInfo,
       phaseText: phaseText,
       normalizeSnapshot: normalizeSnapshot,
+      normXray: normXray,
+      normXraySeat: normXraySeat,
+      normXrayCard: normXrayCard,
+      normXrayBomb: normXrayBomb,
       errText: errText,
     },
   };

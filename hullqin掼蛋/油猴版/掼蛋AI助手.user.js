@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         掼蛋 AI 助手（game.hullqin.cn）
 // @namespace    guandan-ai-helper
-// @version      1.0.0
-// @description  桌游合集掼蛋的 AI 助手：📋记牌器 + 💡出牌提示（本地启发式）+ 🌐DeepSeek 建议 + 🤖自动托管；牌型/回放/进贡还贡规则 1:1 逆向自游戏源码；仅在掼蛋玩法（rule=2）显示。朋友间娱乐使用。
+// @version      1.1.0
+// @description  桌游合集掼蛋的 AI 助手：📋记牌器 + 👁透视（可开关，查看三家手牌与炸弹预警）+ 💡出牌提示（本地启发式）+ 🌐DeepSeek 建议 + 🤖自动托管；牌型/回放/进贡还贡规则 1:1 逆向自游戏源码；仅在掼蛋玩法（rule=2）显示。朋友间娱乐使用。
 // @author       Eve
 // @match        https://game.hullqin.cn/*
 // @run-at       document-idle
@@ -2186,6 +2186,342 @@
   };
 });
 
+/* ============================================================
+ * 掼蛋油猴版 · 透视（X-ray）模块
+ * ------------------------------------------------------------
+ * 用途：读取本机页面已经收到的「本局牌局状态」，把其他三家的手牌、
+ *       张数、炸弹与逢人配整理成可直接渲染的结构，供面板展示。
+ *
+ * 原理（与斗地主透视脚本 hullqin-ddz-esp-script 同一思路，但数据源更稳）：
+ *   站点把服务端广播的 DDZGameData 原文（protobuf，rule=2 为掼蛋）放进
+ *   React props.game.data。cardPositionList 的 108 个值以 7&v 表示归属
+ *   玩家（1..4），服务端没有按玩家裁剪字段，客户端自己也要靠它算四家
+ *   剩余张数与抗贡大王数，因此本机解码即可看到全部 108 张牌的归属。
+ *   所以这里**不需要劫持网络连接**，只解码现有状态即可，兼容性更好。
+ *
+ * 本模块是纯函数（无 DOM、无网络、无存储、无 console），可单独 Node 测试。
+ * ============================================================ */
+(function (root, factory) {
+  const api = factory();
+  if (typeof module !== 'undefined' && module.exports) module.exports = api;
+  else root.GDSiteESP = api;
+})(typeof self !== 'undefined' ? self : this, function () {
+  'use strict';
+
+  const VERSION = '1.0.0';
+
+  const TOTAL = 108;
+  const SUIT_TEXT = ['♦', '♣', '♥', '♠'];
+  const BIG_JOKER = 53;   // 大王 rank 17
+  const SMALL_JOKER = 54; // 小王 rank 16
+  const RANK_TEXT = {
+    17: '大王', 16: '小王', 15: '级', 14: 'A', 13: 'K', 12: 'Q', 11: 'J',
+    10: '10', 9: '9', 8: '8', 7: '7', 6: '6', 5: '5', 4: '4', 3: '3', 2: '2',
+  };
+
+  function num(v, dft) {
+    const n = typeof v === 'number' ? v : Number(v);
+    return isFinite(n) ? n : dft;
+  }
+
+  function normLevel(level) {
+    const lv = num(level, 2);
+    return lv >= 2 && lv <= 14 ? lv : 2;
+  }
+
+  function normalizeId(id) {
+    const n = num(id, 0);
+    return n >= 1 && n <= TOTAL ? Math.floor(n) : 0;
+  }
+
+  function cardLocal(id) {
+    const n = normalizeId(id);
+    return n ? (n - 1) % 54 + 1 : 0;
+  }
+
+  function cardDeck(id) {
+    const n = normalizeId(id);
+    return n ? Math.floor((n - 1) / 54) + 1 : 0;
+  }
+
+  function rankOf(id) {
+    const local = cardLocal(id);
+    if (!local) return 0;
+    if (local === BIG_JOKER) return 17;
+    if (local === SMALL_JOKER) return 16;
+    const t = local % 13;
+    return t === 1 ? 14 : (t === 0 ? 13 : t);
+  }
+
+  /** 花色：0 ♦ / 1 ♣ / 2 ♥ / 3 ♠；王返回 -1 */
+  function suitOf(id) {
+    const local = cardLocal(id);
+    if (!local || local >= BIG_JOKER) return -1;
+    return Math.floor((local - 1) / 13);
+  }
+
+  function rankText(rank) {
+    return RANK_TEXT[rank] || String(rank || '');
+  }
+
+  /** 排序权重：级牌排在 A 之上；大王 17、小王 16 */
+  function levelOrder(rank, level) {
+    const lv = normLevel(level);
+    return rank === lv ? 15 : rank;
+  }
+
+  /** 逢人配：红桃级牌（local 27..39 且点数等于级牌） */
+  function isWildCard(id, level) {
+    const local = cardLocal(id);
+    return local >= 27 && local <= 39 && rankOf(id) === normLevel(level);
+  }
+
+  /** 单张牌的展示信息（不修改入参） */
+  function cardInfo(id, level) {
+    const n = normalizeId(id);
+    if (!n) return null;
+    const lv = normLevel(level);
+    const rank = rankOf(n);
+    const suit = suitOf(n);
+    const joker = rank >= 16;
+    return {
+      id: n,
+      local: cardLocal(n),
+      deck: cardDeck(n),
+      rank: rank,
+      suit: suit,
+      suitText: joker ? '' : SUIT_TEXT[suit],
+      text: joker ? (rank === 17 ? '大王' : '小王') : SUIT_TEXT[suit] + rankText(rank),
+      red: !joker && (suit === 0 || suit === 2),
+      isLevel: !joker && rank === lv,
+      isWild: isWildCard(n, lv),
+      isJoker: joker,
+      order: levelOrder(rank, lv),
+    };
+  }
+
+  /** 按「级牌优先、同点按花色」排序，便于肉眼核对 */
+  function sortCards(cards, level) {
+    const lv = normLevel(level);
+    const list = (Array.isArray(cards) ? cards : []).map(normalizeId).filter(Boolean);
+    list.sort(function (a, b) {
+      const ia = cardInfo(a, lv);
+      const ib = cardInfo(b, lv);
+      if (ib.order !== ia.order) return ib.order - ia.order;
+      if (ia.suit !== ib.suit) return ia.suit - ib.suit;
+      return ia.id - ib.id;
+    });
+    return list;
+  }
+
+  /**
+   * 识别手牌里「潜在能打出的炸弹」（自然炸弹 + 用逢人配凑出的）。
+   * 只做保守统计：同点≥4、四大天王、同花顺（含 A2345），配牌只补缺张。
+   * 返回 {bombs, wildCount}；bombs 每项 {kind, size, rank, label, power}。
+   */
+  function bombsOf(cards, level) {
+    const lv = normLevel(level);
+    const list = sortCards(cards, lv);
+    const wilds = [];
+    const others = [];
+    for (let i = 0; i < list.length; i++) {
+      if (isWildCard(list[i], lv)) wilds.push(list[i]);
+      else others.push(list[i]);
+    }
+    const u = wilds.length;
+    const out = [];
+
+    // 1) 四大天王（两副牌：两张大 + 两张小，id 可能是 53/107、54/108）
+    let big = 0;
+    let small = 0;
+    for (let i = 0; i < others.length; i++) {
+      const r = rankOf(others[i]);
+      if (r === 17) big++;
+      else if (r === 16) small++;
+    }
+    if (big >= 2 && small >= 2) {
+      out.push({ kind: 'fourJokers', size: 4, rank: 0, label: '四大天王', power: 99 });
+    }
+
+    // 2) 同点炸弹（自然 / 配牌）
+    const groups = {};
+    for (let i = 0; i < others.length; i++) {
+      const c = others[i];
+      if (rankOf(c) >= 16) continue;
+      const r = rankOf(c);
+      const ord = levelOrder(r, lv);
+      const g = groups[ord] || (groups[ord] = { rank: r, order: ord, size: 0 });
+      g.size++;
+    }
+    Object.keys(groups).forEach(function (k) {
+      const g = groups[k];
+      if (g.size >= 4 && g.size <= 8) {
+        out.push({ kind: 'sameRank', size: g.size, rank: g.rank, label: g.size + '张' + rankText(g.rank), power: g.size });
+      } else if (u > 0) {
+        const size = g.size + u;
+        if (size >= 4 && size <= 8) {
+          out.push({ kind: 'sameRank', size: size, rank: g.rank, label: size + '张' + rankText(g.rank) + '（配）', power: size });
+        }
+      }
+    });
+
+    // 3) 同花顺（自然 / 配牌；A 可作 1 组成 A2345）
+    for (let suit = 0; suit < 4; suit++) {
+      const ranks = {};
+      for (let i = 0; i < others.length; i++) {
+        const c = others[i];
+        if (rankOf(c) >= 16) continue;
+        if (suitOf(c) !== suit) continue;
+        ranks[rankOf(c)] = true;
+      }
+      for (let b = 5; b <= 14; b++) {
+        let need = 0;
+        let present = 0;
+        for (let p = b - 4; p <= b; p++) {
+          const r = (b === 5 && p === 1) ? 14 : p; // b=5 即 A2345，1 代表 A
+          if (ranks[r]) present++;
+          else need++;
+        }
+        if (present < 1) continue;
+        if (need === 0) {
+          out.push({ kind: 'straightFlush', size: 5, rank: b, label: '同花顺 ' + SUIT_TEXT[suit] + rankText(b), power: 5.5 });
+        } else if (u > 0 && need <= u) {
+          out.push({ kind: 'straightFlush', size: 5, rank: b, label: '同花顺 ' + SUIT_TEXT[suit] + rankText(b) + '（配）', power: 5.5 });
+        }
+      }
+    }
+
+    out.sort(function (a, b) {
+      if (b.power !== a.power) return b.power - a.power;
+      return b.size - a.size;
+    });
+    return { bombs: out, wildCount: u };
+  }
+
+  function partnerOf(seat) {
+    const s = num(seat, 0);
+    return s <= 2 ? s + 2 : (s >= 3 ? s - 2 : 0);
+  }
+
+  function relName(seat, mySeat) {
+    const s = num(seat, 0);
+    const me = num(mySeat, 0);
+    if (!s || !me) return '';
+    if (s === me) return '我';
+    if (s === partnerOf(me)) return '对家';
+    if (s === (me % 4) + 1) return '下家';
+    return '上家';
+  }
+
+  /**
+   * 透视主入口：expanded 为 GDSite.expandState() 的结果。
+   * 只读取 playerCardLists / playerRestCardCounts / level，不修改入参。
+   */
+  function buildXray(expanded, mySeat) {
+    const e = expanded && typeof expanded === 'object' ? expanded : {};
+    const seat = num(mySeat, 0);
+    const lv = normLevel(e.level);
+    const base = {
+      ok: false,
+      reason: 'no-data',
+      level: lv,
+      levelText: rankText(lv),
+      wildText: '♥' + rankText(lv),
+      mySeat: seat,
+      partnerSeat: partnerOf(seat),
+      seats: [],
+      warnings: [],
+      totalCards: 0,
+      bombCount: 0,
+    };
+    if (!seat || seat < 1 || seat > 4) {
+      base.reason = 'not-seated';
+      return base;
+    }
+
+    const lists = Array.isArray(e.playerCardLists) ? e.playerCardLists : [];
+    const rests = Array.isArray(e.playerRestCardCounts) ? e.playerRestCardCounts : [];
+    const order = [seat % 4 + 1, partnerOf(seat), seat === 1 ? 4 : seat - 1];
+    const seats = [];
+    let totalCards = 0;
+    let bombCount = 0;
+    let unavailableCount = 0;
+
+    for (let i = 0; i < order.length; i++) {
+      const s = order[i];
+      const raw = Array.isArray(lists[s]) ? lists[s] : [];
+      const cards = sortCards(raw, lv);
+      const rest = num(rests[s], cards.length);
+      const bombsInfo = bombsOf(cards, lv);
+      const unavailable = cards.length === 0 && rest > 0;
+      if (unavailable) unavailableCount++;
+      totalCards += cards.length;
+      bombCount += bombsInfo.bombs.length;
+      const seatInfo = {
+        seat: s,
+        name: relName(s, seat),
+        isPartner: s === partnerOf(seat),
+        count: rest > 0 ? rest : cards.length,
+        cards: cards.map(function (id) { return cardInfo(id, lv); }),
+        bombs: bombsInfo.bombs,
+        wildCount: bombsInfo.wildCount,
+        unavailable: unavailable,
+      };
+      seats.push(seatInfo);
+      if (seatInfo.bombs.length) {
+        base.warnings.push(seatInfo.name + ' 有 ' + seatInfo.bombs.length + ' 个炸弹（' +
+          seatInfo.bombs.map(function (b) { return b.label; }).join('、') + '）');
+      }
+    }
+
+    base.seats = seats;
+    base.totalCards = totalCards;
+    base.bombCount = bombCount;
+    if (!totalCards) base.reason = unavailableCount ? 'no-data' : 'no-cards';
+    else if (unavailableCount) base.reason = 'partial';
+    else base.reason = 'ok';
+    base.ok = totalCards > 0;
+    return base;
+  }
+
+  /** 面板底部的一句话汇总 */
+  function summaryOf(xray) {
+    if (!xray || !xray.seats || !xray.seats.length || !xray.totalCards) return '暂无可透视的手牌';
+    let wilds = 0;
+    for (let i = 0; i < xray.seats.length; i++) wilds += xray.seats[i].wildCount || 0;
+    return '可见 ' + xray.totalCards + ' 张 · 炸弹 ' + xray.bombCount + ' 个' + (wilds ? ' · 逢人配 ' + wilds + ' 张' : '');
+  }
+
+  return {
+    VERSION: VERSION,
+    TOTAL: TOTAL,
+    SUIT_TEXT: SUIT_TEXT.slice(),
+    buildXray: buildXray,
+    bombsOf: bombsOf,
+    sortCards: sortCards,
+    cardInfo: cardInfo,
+    rankOf: rankOf,
+    suitOf: suitOf,
+    rankText: rankText,
+    levelOrder: levelOrder,
+    isWildCard: isWildCard,
+    relName: relName,
+    partnerOf: partnerOf,
+    summaryOf: summaryOf,
+    _internals: {
+      VERSION: VERSION,
+      TOTAL: TOTAL,
+      BIG_JOKER: BIG_JOKER,
+      SMALL_JOKER: SMALL_JOKER,
+      RANK_TEXT: RANK_TEXT,
+      normalizeId: normalizeId,
+      cardLocal: cardLocal,
+      cardDeck: cardDeck,
+      normLevel: normLevel,
+    },
+  };
+});
+
 /*!
  * gd.site.ai.js — 掼蛋 AI 助手（油猴版）· 本地启发式出牌
  *
@@ -3175,6 +3511,7 @@
     temperature: 0.2,
     timeoutMs: 30000,
     auto: false,
+    xray: false,
   };
 
   const MODEL_OPTIONS = ['deepseek-chat', 'deepseek-reasoner'];
@@ -3340,6 +3677,57 @@
       hasKey: !!s.hasKey,
       model: str(s.model) || DEFAULT_SETTINGS.model,
       baseUrl: str(s.baseUrl) || DEFAULT_SETTINGS.baseUrl,
+      xray: !!s.xray,
+    };
+  }
+
+  function normXrayCard(raw) {
+    if (!raw || typeof raw !== 'object') return null;
+    return {
+      id: num(raw.id, 0),
+      text: str(raw.text),
+      red: !!raw.red,
+      isLevel: !!raw.isLevel,
+      isWild: !!raw.isWild,
+      isJoker: !!raw.isJoker,
+    };
+  }
+
+  function normXrayBomb(raw) {
+    if (!raw || typeof raw !== 'object') return null;
+    return {
+      kind: str(raw.kind),
+      size: num(raw.size, 0),
+      label: str(raw.label) || '炸弹',
+      power: num(raw.power, 0),
+    };
+  }
+
+  function normXraySeat(raw) {
+    const s = raw && typeof raw === 'object' ? raw : {};
+    return {
+      seat: num(s.seat, 0),
+      name: str(s.name),
+      isPartner: !!s.isPartner,
+      count: num(s.count, 0),
+      cards: Array.isArray(s.cards) ? s.cards.map(normXrayCard).filter(Boolean) : [],
+      bombs: Array.isArray(s.bombs) ? s.bombs.map(normXrayBomb).filter(Boolean) : [],
+      wildCount: num(s.wildCount, 0),
+      unavailable: !!s.unavailable,
+    };
+  }
+
+  function normXray(raw) {
+    const x = raw && typeof raw === 'object' ? raw : {};
+    return {
+      enabled: !!x.enabled,
+      seats: Array.isArray(x.seats) ? x.seats.map(normXraySeat) : [],
+      warnings: Array.isArray(x.warnings)
+        ? x.warnings.filter(function (t) { return typeof t === 'string' && t; })
+        : [],
+      note: str(x.note),
+      totalCards: num(x.totalCards, 0),
+      bombCount: num(x.bombCount, 0),
     };
   }
 
@@ -3363,6 +3751,7 @@
       history: Array.isArray(s.history) ? s.history : [],
       suggestion: normSuggestion(s.suggestion),
       tribute: normTribute(s.tribute),
+      xray: normXray(s.xray),
       busy: !!s.busy,
       auto: s.auto === undefined ? undefined : !!s.auto,
       settings: normSettings(s.settings),
@@ -3502,6 +3891,32 @@
     '.hqgd-overlay .hqgd-help-note{font-size:10px;color:#64748b;line-height:1.5;margin-top:2px}',
     '.hqgd-overlay .hqgd-kbd{display:inline-block;background:#1e293b;border:1px solid #334155;',
     'border-radius:4px;padding:0 3px;font-size:10px;color:#cbd5e1}',
+    /* ---- 透视（仅本机可见） ---- */
+    '#hqgd-panel .hqgd-xray-head{display:flex;align-items:center;gap:6px;margin-bottom:4px}',
+    '#hqgd-panel .hqgd-xray-toggle{cursor:pointer;border:1px solid #334155;border-radius:6px;',
+    'padding:2px 7px;font:inherit;font-size:10px;line-height:1.5;background:#1e293b;color:#94a3b8;',
+    'white-space:nowrap;transition:background .12s,color .12s}',
+    '#hqgd-panel .hqgd-xray-toggle:hover{background:#334155;color:#e2e8f0}',
+    '#hqgd-panel .hqgd-xray-toggle.hqgd-on{background:#7c2d12;border-color:#ea580c;color:#fed7aa;font-weight:700}',
+    '#hqgd-panel .hqgd-xray-note{font-size:9.5px;line-height:1.5;color:#7c8ba1;margin-bottom:4px}',
+    '#hqgd-panel .hqgd-xray-seat{border:1px solid #1e293b;border-radius:7px;padding:4px 6px;',
+    'margin-bottom:4px;background:#111c30}',
+    '#hqgd-panel .hqgd-xray-seat.hqgd-xray-partner{border-color:#155e75}',
+    '#hqgd-panel .hqgd-xray-seat-head{display:flex;align-items:center;gap:5px;flex-wrap:wrap}',
+    '#hqgd-panel .hqgd-xray-seat-name{font-size:10.5px;font-weight:700;color:#cbd5e1}',
+    '#hqgd-panel .hqgd-xray-seat-count{font-size:10px;color:#94a3b8;margin-left:auto}',
+    '#hqgd-panel .hqgd-xray-tag{font-size:9px;line-height:1.4;padding:0 3px;border-radius:4px;',
+    'background:#083344;border:1px solid #155e75;color:#67e8f9}',
+    '#hqgd-panel .hqgd-xray-chip{display:inline-block;font-size:10px;line-height:1.45;padding:0 3px;',
+    'margin:1px 2px 1px 0;border-radius:4px;background:#1e293b;border:1px solid #334155;color:#e2e8f0}',
+    '#hqgd-panel .hqgd-xray-chip.hqgd-xray-red{color:#f87171}',
+    '#hqgd-panel .hqgd-xray-chip.hqgd-xray-level{background:#3b2f0b;border-color:#a16207;color:#fde68a}',
+    '#hqgd-panel .hqgd-xray-chip.hqgd-xray-wild{background:#3b0f3a;border-color:#c026d3;color:#f5d0fe;font-weight:700}',
+    '#hqgd-panel .hqgd-xray-chip.hqgd-xray-joker{background:#1e1b4b;border-color:#6366f1;color:#c7d2fe}',
+    '#hqgd-panel .hqgd-xray-bomb{font-size:9.5px;line-height:1.45;padding:0 4px;border-radius:4px;',
+    'background:#7f1d1d;border:1px solid #b91c1c;color:#fecaca}',
+    '#hqgd-panel .hqgd-xray-empty{font-size:10px;color:#64748b;line-height:1.5;padding:2px 1px}',
+    '#hqgd-panel .hqgd-xray-sum{font-size:9.5px;color:#64748b;line-height:1.5;margin-top:2px;word-break:break-all}',
   ].join('');
 
   /* ============================================================
@@ -3559,6 +3974,7 @@
     let lastSnapshot = null;
     let lastSuggestion = null;
     let autoPending = null; // 本地先反馈自动托管开关，下一次 snapshot 到达后以 body 为准
+    let xrayPending = null; // 本地先反馈透视开关，下一次 snapshot 到达后以 body 为准
     let settings = mergeSettings(DEFAULT_SETTINGS, opts.settings);
     let settingsUi = null; // {overlay, keyInput, ...}
     let helpUi = null;
@@ -3619,6 +4035,7 @@
       if (x.timeoutMs !== undefined) out.timeoutMs = num(x.timeoutMs, DEFAULT_SETTINGS.timeoutMs);
       if (x.timeout !== undefined) out.timeoutMs = num(x.timeout, out.timeoutMs);
       if (x.auto !== undefined) out.auto = !!x.auto;
+      if (x.xray !== undefined) out.xray = !!x.xray;
       return out;
     }
 
@@ -3664,6 +4081,21 @@
     secCounter.appendChild(counterGrid);
     secCounter.appendChild(counterSum);
 
+    const secXray = el('div', PREFIX + 'sec');
+    const xrayHead = el('div', PREFIX + 'xray-head');
+    const xrayTitle = el('span', PREFIX + 'sec-title', '👁 透视 · 对手手牌');
+    const xrayToggle = btn('透视：关', PREFIX + 'xray-toggle', function () { toggleXray(); });
+    xrayToggle.title = '透视：点击开启（仅本机可见）';
+    xrayHead.appendChild(xrayTitle);
+    xrayHead.appendChild(xrayToggle);
+    const xrayNote = el('div', PREFIX + 'xray-note', '开启后可查看其他三家手牌与炸弹预警（仅本机可见）。');
+    const xrayList = el('div', PREFIX + 'xray-list');
+    const xraySum = el('div', PREFIX + 'xray-sum', '');
+    secXray.appendChild(xrayHead);
+    secXray.appendChild(xrayNote);
+    secXray.appendChild(xrayList);
+    secXray.appendChild(xraySum);
+
     const secMy = el('div', PREFIX + 'sec');
     const myTitle = el('div', PREFIX + 'sec-title', '🙋 我的信息');
     const myInfo = el('div', PREFIX + 'myinfo', '');
@@ -3699,6 +4131,7 @@
 
     bodyEl.appendChild(noticeEl);
     bodyEl.appendChild(secCounter);
+    bodyEl.appendChild(secXray);
     bodyEl.appendChild(secMy);
     bodyEl.appendChild(secTable);
     bodyEl.appendChild(secTribute);
@@ -3735,6 +4168,88 @@
       const on_ = effectiveAuto();
       autoBtn.className = PREFIX + 'icon-btn' + (on_ ? ' ' + PREFIX + 'on' : '');
       autoBtn.title = on_ ? '自动托管：已开启（点击关闭）' : '自动托管：已关闭（点击开启）';
+    }
+
+    /* ---------- 透视（对手手牌，仅本机可见） ---------- */
+
+    function toggleXray() {
+      const next = !effectiveXray();
+      settings.xray = next;
+      xrayPending = next;
+      renderXray(lastSnapshot || normalizeSnapshot(null));
+      if (typeof opts.onToggleXray === 'function') callCb('onToggleXray', next);
+      else if (typeof opts.onSaveSettings === 'function') {
+        callCb('onSaveSettings', buildSettingsPayload({ xray: next }));
+      }
+      toast(next ? '透视已开启（仅本机可见）' : '透视已关闭');
+    }
+
+    function effectiveXray() {
+      if (xrayPending !== null) return !!xrayPending;
+      if (lastSnapshot && lastSnapshot.xray && lastSnapshot.xray.enabled !== undefined) {
+        return !!lastSnapshot.xray.enabled;
+      }
+      return !!settings.xray;
+    }
+
+    function xrayChip(c) {
+      let cls = PREFIX + 'xray-chip';
+      if (c.red) cls += ' ' + PREFIX + 'xray-red';
+      if (c.isLevel) cls += ' ' + PREFIX + 'xray-level';
+      if (c.isWild) cls += ' ' + PREFIX + 'xray-wild';
+      if (c.isJoker) cls += ' ' + PREFIX + 'xray-joker';
+      const chip = el('span', cls, c.text || '?');
+      if (c.isWild) chip.title = '逢人配（红桃级牌）';
+      else if (c.isLevel) chip.title = '级牌';
+      else if (c.isJoker) chip.title = '王';
+      return chip;
+    }
+
+    function xraySeatBlock(seat) {
+      const block = el('div', PREFIX + 'xray-seat' + (seat.isPartner ? ' ' + PREFIX + 'xray-partner' : ''));
+      const head2 = el('div', PREFIX + 'xray-seat-head');
+      head2.appendChild(el('span', PREFIX + 'xray-seat-name', (seat.name || '?') + ' · ' + seat.seat + '号位'));
+      if (seat.isPartner) head2.appendChild(el('span', PREFIX + 'xray-tag', '队友'));
+      head2.appendChild(el('span', PREFIX + 'xray-seat-count', seat.count + ' 张'));
+      for (let i = 0; i < seat.bombs.length; i++) {
+        head2.appendChild(el('span', PREFIX + 'xray-bomb', '💣 ' + (seat.bombs[i].label || '炸弹')));
+      }
+      block.appendChild(head2);
+      if (seat.unavailable) {
+        block.appendChild(el('div', PREFIX + 'xray-empty', '该家手牌未就绪（可能尚未发牌）'));
+        return block;
+      }
+      if (!seat.cards.length) {
+        block.appendChild(el('div', PREFIX + 'xray-empty', '已出完 / 无手牌'));
+        return block;
+      }
+      const cardsEl = el('div', PREFIX + 'xray-cards');
+      for (let j = 0; j < seat.cards.length; j++) cardsEl.appendChild(xrayChip(seat.cards[j]));
+      block.appendChild(cardsEl);
+      return block;
+    }
+
+    function renderXray(snap) {
+      const x = (snap && snap.xray) || normXray(null);
+      const on_ = effectiveXray();
+      xrayToggle.textContent = on_ ? '透视：开' : '透视：关';
+      xrayToggle.className = PREFIX + 'xray-toggle' + (on_ ? ' ' + PREFIX + 'on' : '');
+      xrayToggle.title = on_ ? '透视：已开启（点击关闭，仅本机可见）' : '透视：已关闭（点击开启）';
+      xrayList.textContent = '';
+      xraySum.textContent = '';
+      if (!on_) {
+        xrayNote.textContent = '透视已关闭。开启后可查看其他三家手牌与炸弹预警（仅本机可见）。';
+        return;
+      }
+      xrayNote.textContent = '⚠ 透视会破坏游戏公平性：仅本机可见，请只与朋友娱乐使用，切勿用于比赛或赌博。';
+      if (!x.seats.length) {
+        xrayList.appendChild(el('div', PREFIX + 'xray-empty', x.note || '等待发牌 / 牌局数据…'));
+        return;
+      }
+      for (let i = 0; i < x.seats.length; i++) xrayList.appendChild(xraySeatBlock(x.seats[i]));
+      const parts = ['可见 ' + (x.totalCards || 0) + ' 张'];
+      if (x.bombCount) parts.push('炸弹 ' + x.bombCount + ' 个');
+      xraySum.textContent = parts.join(' · ');
     }
 
     /* ---------- 渲染：记牌器 ---------- */
@@ -3965,14 +4480,16 @@
     function render(snapRaw) {
       const snap = normalizeSnapshot(snapRaw);
       lastSnapshot = snap;
-      // body 明确给出了 auto 字段时，以 body 为准确认开关状态
+      // body 明确给出了 auto/xray 字段时，以 body 为准确认开关状态
       if (snapRaw && typeof snapRaw === 'object' && snapRaw.auto !== undefined) autoPending = null;
+      if (snapRaw && typeof snapRaw === 'object' && snapRaw.xray !== undefined) xrayPending = null;
       root.style.display = snap.visible ? '' : 'none';
       renderBadge(snap);
       refreshAutoBtn();
       const guandan = snap.isGuandan;
       const hideSections = !guandan;
       secCounter.style.display = hideSections ? 'none' : '';
+      secXray.style.display = hideSections ? 'none' : '';
       secMy.style.display = hideSections ? 'none' : '';
       secTable.style.display = hideSections ? 'none' : '';
       secSuggest.style.display = hideSections ? 'none' : '';
@@ -3984,6 +4501,7 @@
         noticeEl.style.display = 'none';
         noticeEl.textContent = '';
         renderCounter(snap.counter);
+        renderXray(snap);
         renderHandInfo(snap.handInfo);
         renderTable(snap);
         renderTribute(snap.tribute);
@@ -4022,6 +4540,7 @@
         temperature: settings.temperature,
         timeoutMs: settings.timeoutMs,
         auto: !!settings.auto,
+        xray: !!settings.xray,
       };
       const o = over && typeof over === 'object' ? over : {};
       for (const k in o) if (Object.prototype.hasOwnProperty.call(o, k)) out[k] = o[k];
@@ -4263,6 +4782,7 @@
       const sections = [
         ['功能', [
           '📋 记牌器：统计除我之外三家的剩余牌（未知/已出/逢人配）。',
+          '👁 透视：可开关查看其他三家手牌与炸弹预警（默认关闭，仅本机可见）。',
           '💡 本地建议：纯前端启发式，不联网也能用。',
           '🌐 DeepSeek 建议：调用 DeepSeek 官方 API，失败自动回退本地建议。',
           '⚡ 采用并出牌 / 🃏 不出：由脚本自动点击站点牌面与按钮。',
@@ -4276,6 +4796,12 @@
         ['进贡 / 还贡', [
           '进贡阶段：站点会自动预选建议贡牌，点「采纳进贡」或「确认进贡」即可。',
           '还贡阶段：需在站点允许的候选牌中选中 1 张，再点「确认还贡」。',
+        ]],
+        ['👁 透视（默认关闭）', [
+          '面板「👁 透视 · 对手手牌」右侧的「透视：关」按钮即开关；设置保存在本机 localStorage，下次自动沿用。',
+          '开启后显示其他三家手牌、剩余张数，以及炸弹预警（4 张及以上、同花顺、四大天王）。',
+          '数据来自本局页面状态的只读解码，不修改网络请求，也不影响正常出牌。',
+          '透视会破坏游戏公平性：内容仅本机显示，建议只与朋友娱乐时使用，切勿用于比赛或赌博。',
         ]],
         ['规则口径', [
           '级牌点数排 A 之上；红桃级牌为「逢人配」，可当任意牌（王除外）。',
@@ -4374,6 +4900,10 @@
       formatHandInfo: formatHandInfo,
       phaseText: phaseText,
       normalizeSnapshot: normalizeSnapshot,
+      normXray: normXray,
+      normXraySeat: normXraySeat,
+      normXrayCard: normXrayCard,
+      normXrayBomb: normXrayBomb,
       errText: errText,
     },
   };
@@ -4385,11 +4915,12 @@
  * 职责（SPEC2 §6）：
  *   1. 从 React fiber 读 game.data（protobuf）→ GDSite.decodeGameData → GDSite.expandState
  *   2. 每 tick 生成 snapshot 交给 GDSiteUI 渲染
- *   3. 处理「本地建议 / DeepSeek 建议 / 采用并出牌 / 不出 / 进贡 / 还贡 / 下一局 / 设置」
+ *   3. 处理「本地建议 / DeepSeek 建议 / 采用并出牌 / 不出 / 进贡 / 还贡 / 下一局 / 设置 / 透视开关」
  *   4. 模拟真实点击：手牌选中 + 站点按钮；建议高亮；自动托管
- *   5. window.__gdAI 调试接口
+ *   5. 透视：把 GDSiteESP.buildXray 的结果塞进 snapshot（默认关闭，仅本机可见）
+ *   6. window.__gdAI 调试接口
  *
- * 依赖（打包顺序在前）：HQ / GDSite / GDSiteAI / GDDeepSeek / GDSiteRemote / GDSiteUI
+ * 依赖（打包顺序在前）：HQ / GDSite / GDSiteAI / GDDeepSeek / GDSiteRemote / GDSiteESP / GDSiteUI
  * 不读网络、不写日志（API Key 只在 localStorage，绝不打印）。
  * ============================================================ */
 (function () {
@@ -4398,11 +4929,12 @@
   const G = (typeof GDSite !== 'undefined' && GDSite) || self.GDSite;
   const AI = (typeof GDSiteAI !== 'undefined' && GDSiteAI) || self.GDSiteAI;
   const Remote = (typeof GDSiteRemote !== 'undefined' && GDSiteRemote) || self.GDSiteRemote;
+  const ESP = (typeof GDSiteESP !== 'undefined' && GDSiteESP) || self.GDSiteESP;
   const UI = (typeof GDSiteUI !== 'undefined' && GDSiteUI) || self.GDSiteUI;
   const DS = (typeof GDDeepSeek !== 'undefined' && GDDeepSeek) || self.GDDeepSeek;
   const HQ = self.HQ;
 
-  const VERSION = '1.0.0';
+  const VERSION = '1.1.0';
   const SETTINGS_KEY = 'gdSiteAI.settings';
   const DEFAULTS_SETTINGS = (function () {
     const d = (Remote && Remote.DEFAULTS) || (DS && DS.DEFAULTS) || {};
@@ -4413,6 +4945,7 @@
       temperature: typeof d.temperature === 'number' ? d.temperature : 0.2,
       timeoutMs: typeof d.timeoutMs === 'number' ? d.timeoutMs : 30000,
       auto: false,
+      xray: false,
     };
   })();
 
@@ -4500,6 +5033,7 @@
       if (isFinite(t)) s.timeoutMs = Math.max(3000, Math.min(120000, Math.round(t)));
     }
     if (p.auto !== undefined) s.auto = !!p.auto;
+    if (p.xray !== undefined) s.xray = !!p.xray;
     HQ.saveSettings(SETTINGS_KEY, s);
     if (st.panel) st.panel.setSettings(uiSettings());
   }
@@ -4522,6 +5056,7 @@
       temperature: s.temperature,
       timeoutMs: s.timeoutMs,
       auto: !!s.auto,
+      xray: !!s.xray,
     };
   }
 
@@ -4687,6 +5222,42 @@
     };
   }
 
+  /* ============================ 透视数据 ============================ */
+
+  /**
+   * 透视视图：数据源是页面 fiber 里 props.game.data 解码出的 expanded
+   * （服务端下发的 cardPositionList 含四家全部牌归属，见 SPEC2 §1）。
+   * 只读，不修改网络/页面状态；关闭时不下发任何手牌数据。
+   */
+  function xrayView(game) {
+    const enabled = !!(st.settings && st.settings.xray);
+    if (!enabled) {
+      return { enabled: false, seats: [], warnings: [], note: '', totalCards: 0, bombCount: 0 };
+    }
+    const exp = game && game.expanded;
+    const mySeat = (game && game.mySeat) || 0;
+    if (!exp || !mySeat) {
+      return { enabled: true, seats: [], warnings: [], note: '未入座或尚未读到牌局数据', totalCards: 0, bombCount: 0 };
+    }
+    let x;
+    try {
+      x = (ESP && typeof ESP.buildXray === 'function') ? ESP.buildXray(exp, mySeat) : null;
+    } catch (e) {
+      return { enabled: true, seats: [], warnings: [], note: '透视数据异常：' + errText(e), totalCards: 0, bombCount: 0 };
+    }
+    if (!x || !x.ok) {
+      return { enabled: true, seats: [], warnings: [], note: (x && x.note) || '等待发牌…', totalCards: 0, bombCount: 0 };
+    }
+    return {
+      enabled: true,
+      seats: x.seats || [],
+      warnings: x.warnings || [],
+      note: '',
+      totalCards: x.totalCards || 0,
+      bombCount: x.bombCount || 0,
+    };
+  }
+
   function buildSnapshot(game) {
     const exp = game.expanded || {};
     const mySeat = game.mySeat || 1;
@@ -4741,9 +5312,14 @@
       }),
       suggestion: suggestionView(st.result),
       tribute: tributeView(game),
+      xray: xrayView(game),
       busy: !!st.busy,
       auto: !!(st.settings && st.settings.auto),
-      settings: { hasKey: !!effectiveApiKey(st.settings || DEFAULTS_SETTINGS), model: (st.settings && st.settings.model) || '' },
+      settings: {
+        hasKey: !!effectiveApiKey(st.settings || DEFAULTS_SETTINGS),
+        model: (st.settings && st.settings.model) || '',
+        xray: !!(st.settings && st.settings.xray),
+      },
     };
     return snapshot;
   }
@@ -5138,6 +5714,11 @@
       renderTick();
     },
 
+    onToggleXray: function (on_) {
+      saveSettings({ xray: !!on_ });
+      renderTick();
+    },
+
     onSaveSettings: function (form) {
       saveSettings(form || {});
       toast('设置已保存（本机）');
@@ -5288,9 +5869,14 @@
         history: [],
         suggestion: null,
         tribute: null,
+        xray: xrayView(game),
         busy: !!st.busy,
         auto: !!(st.settings && st.settings.auto),
-        settings: { hasKey: !!effectiveApiKey(st.settings || DEFAULTS_SETTINGS), model: (st.settings && st.settings.model) || '' },
+        settings: {
+          hasKey: !!effectiveApiKey(st.settings || DEFAULTS_SETTINGS),
+          model: (st.settings && st.settings.model) || '',
+          xray: !!(st.settings && st.settings.xray),
+        },
       };
     }
     return buildSnapshot(game);
@@ -5351,6 +5937,7 @@
           baseUrl: st.settings && st.settings.baseUrl,
           model: st.settings && st.settings.model,
           auto: !!(st.settings && st.settings.auto),
+          xray: !!(st.settings && st.settings.xray),
         },
         game: st.game ? { guandan: st.game.guandan, reason: st.game.reason, mySeat: st.game.mySeat } : null,
         snapshot: st.snapshot,
@@ -5384,6 +5971,7 @@
     decode: function (bytes) { return G.decodeGameData(bytes); },
     expand: function (raw) { return G.expandState(raw); },
     encode: function (raw) { return G.encodeGameData(raw); },
+    xray: function () { return xrayView(st.game); },
     tick: tick,
   };
 

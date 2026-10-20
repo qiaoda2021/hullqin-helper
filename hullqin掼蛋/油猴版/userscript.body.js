@@ -4,11 +4,12 @@
  * 职责（SPEC2 §6）：
  *   1. 从 React fiber 读 game.data（protobuf）→ GDSite.decodeGameData → GDSite.expandState
  *   2. 每 tick 生成 snapshot 交给 GDSiteUI 渲染
- *   3. 处理「本地建议 / DeepSeek 建议 / 采用并出牌 / 不出 / 进贡 / 还贡 / 下一局 / 设置」
+ *   3. 处理「本地建议 / DeepSeek 建议 / 采用并出牌 / 不出 / 进贡 / 还贡 / 下一局 / 设置 / 透视开关」
  *   4. 模拟真实点击：手牌选中 + 站点按钮；建议高亮；自动托管
- *   5. window.__gdAI 调试接口
+ *   5. 透视：把 GDSiteESP.buildXray 的结果塞进 snapshot（默认关闭，仅本机可见）
+ *   6. window.__gdAI 调试接口
  *
- * 依赖（打包顺序在前）：HQ / GDSite / GDSiteAI / GDDeepSeek / GDSiteRemote / GDSiteUI
+ * 依赖（打包顺序在前）：HQ / GDSite / GDSiteAI / GDDeepSeek / GDSiteRemote / GDSiteESP / GDSiteUI
  * 不读网络、不写日志（API Key 只在 localStorage，绝不打印）。
  * ============================================================ */
 (function () {
@@ -17,11 +18,12 @@
   const G = (typeof GDSite !== 'undefined' && GDSite) || self.GDSite;
   const AI = (typeof GDSiteAI !== 'undefined' && GDSiteAI) || self.GDSiteAI;
   const Remote = (typeof GDSiteRemote !== 'undefined' && GDSiteRemote) || self.GDSiteRemote;
+  const ESP = (typeof GDSiteESP !== 'undefined' && GDSiteESP) || self.GDSiteESP;
   const UI = (typeof GDSiteUI !== 'undefined' && GDSiteUI) || self.GDSiteUI;
   const DS = (typeof GDDeepSeek !== 'undefined' && GDDeepSeek) || self.GDDeepSeek;
   const HQ = self.HQ;
 
-  const VERSION = '1.0.0';
+  const VERSION = '1.1.0';
   const SETTINGS_KEY = 'gdSiteAI.settings';
   const DEFAULTS_SETTINGS = (function () {
     const d = (Remote && Remote.DEFAULTS) || (DS && DS.DEFAULTS) || {};
@@ -32,6 +34,7 @@
       temperature: typeof d.temperature === 'number' ? d.temperature : 0.2,
       timeoutMs: typeof d.timeoutMs === 'number' ? d.timeoutMs : 30000,
       auto: false,
+      xray: false,
     };
   })();
 
@@ -119,6 +122,7 @@
       if (isFinite(t)) s.timeoutMs = Math.max(3000, Math.min(120000, Math.round(t)));
     }
     if (p.auto !== undefined) s.auto = !!p.auto;
+    if (p.xray !== undefined) s.xray = !!p.xray;
     HQ.saveSettings(SETTINGS_KEY, s);
     if (st.panel) st.panel.setSettings(uiSettings());
   }
@@ -141,6 +145,7 @@
       temperature: s.temperature,
       timeoutMs: s.timeoutMs,
       auto: !!s.auto,
+      xray: !!s.xray,
     };
   }
 
@@ -306,6 +311,42 @@
     };
   }
 
+  /* ============================ 透视数据 ============================ */
+
+  /**
+   * 透视视图：数据源是页面 fiber 里 props.game.data 解码出的 expanded
+   * （服务端下发的 cardPositionList 含四家全部牌归属，见 SPEC2 §1）。
+   * 只读，不修改网络/页面状态；关闭时不下发任何手牌数据。
+   */
+  function xrayView(game) {
+    const enabled = !!(st.settings && st.settings.xray);
+    if (!enabled) {
+      return { enabled: false, seats: [], warnings: [], note: '', totalCards: 0, bombCount: 0 };
+    }
+    const exp = game && game.expanded;
+    const mySeat = (game && game.mySeat) || 0;
+    if (!exp || !mySeat) {
+      return { enabled: true, seats: [], warnings: [], note: '未入座或尚未读到牌局数据', totalCards: 0, bombCount: 0 };
+    }
+    let x;
+    try {
+      x = (ESP && typeof ESP.buildXray === 'function') ? ESP.buildXray(exp, mySeat) : null;
+    } catch (e) {
+      return { enabled: true, seats: [], warnings: [], note: '透视数据异常：' + errText(e), totalCards: 0, bombCount: 0 };
+    }
+    if (!x || !x.ok) {
+      return { enabled: true, seats: [], warnings: [], note: (x && x.note) || '等待发牌…', totalCards: 0, bombCount: 0 };
+    }
+    return {
+      enabled: true,
+      seats: x.seats || [],
+      warnings: x.warnings || [],
+      note: '',
+      totalCards: x.totalCards || 0,
+      bombCount: x.bombCount || 0,
+    };
+  }
+
   function buildSnapshot(game) {
     const exp = game.expanded || {};
     const mySeat = game.mySeat || 1;
@@ -360,9 +401,14 @@
       }),
       suggestion: suggestionView(st.result),
       tribute: tributeView(game),
+      xray: xrayView(game),
       busy: !!st.busy,
       auto: !!(st.settings && st.settings.auto),
-      settings: { hasKey: !!effectiveApiKey(st.settings || DEFAULTS_SETTINGS), model: (st.settings && st.settings.model) || '' },
+      settings: {
+        hasKey: !!effectiveApiKey(st.settings || DEFAULTS_SETTINGS),
+        model: (st.settings && st.settings.model) || '',
+        xray: !!(st.settings && st.settings.xray),
+      },
     };
     return snapshot;
   }
@@ -757,6 +803,11 @@
       renderTick();
     },
 
+    onToggleXray: function (on_) {
+      saveSettings({ xray: !!on_ });
+      renderTick();
+    },
+
     onSaveSettings: function (form) {
       saveSettings(form || {});
       toast('设置已保存（本机）');
@@ -907,9 +958,14 @@
         history: [],
         suggestion: null,
         tribute: null,
+        xray: xrayView(game),
         busy: !!st.busy,
         auto: !!(st.settings && st.settings.auto),
-        settings: { hasKey: !!effectiveApiKey(st.settings || DEFAULTS_SETTINGS), model: (st.settings && st.settings.model) || '' },
+        settings: {
+          hasKey: !!effectiveApiKey(st.settings || DEFAULTS_SETTINGS),
+          model: (st.settings && st.settings.model) || '',
+          xray: !!(st.settings && st.settings.xray),
+        },
       };
     }
     return buildSnapshot(game);
@@ -970,6 +1026,7 @@
           baseUrl: st.settings && st.settings.baseUrl,
           model: st.settings && st.settings.model,
           auto: !!(st.settings && st.settings.auto),
+          xray: !!(st.settings && st.settings.xray),
         },
         game: st.game ? { guandan: st.game.guandan, reason: st.game.reason, mySeat: st.game.mySeat } : null,
         snapshot: st.snapshot,
@@ -1003,6 +1060,7 @@
     decode: function (bytes) { return G.decodeGameData(bytes); },
     expand: function (raw) { return G.expandState(raw); },
     encode: function (raw) { return G.encodeGameData(raw); },
+    xray: function () { return xrayView(st.game); },
     tick: tick,
   };
 

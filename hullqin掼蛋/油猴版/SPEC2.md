@@ -1,7 +1,7 @@
 # SPEC2 · 掼蛋 AI 助手（game.hullqin.cn 油猴脚本版）
 
 > 目标：给 [桌游合集](https://game.hullqin.cn/ddz) 的「掼蛋」玩法（rule=2，4 人 2 队、两副 108 张、每人 27 张）提供
-> 🃏 **记牌器** + 💡 **出牌建议（本地启发式）** + 🌐 **DeepSeek 出牌建议（API 可配置、失败回退本地）** + ⚡ **一键出牌/不出/进贡/还贡**。
+> 🃏 **记牌器** + 👁 **透视（可开关，查看其他三家手牌与炸弹预警）** + 💡 **出牌建议（本地启发式）** + 🌐 **DeepSeek 出牌建议（API 可配置、失败回退本地）** + ⚡ **一键出牌/不出/进贡/还贡**。
 > 本目录所有文件均为新建，**不改动** 父目录 `hullqin掼蛋/`（离线网页版）已交付的 `gd.core.js` / `gd.ai.js` / `gd.deepseek.js` / `index.html` 等。
 
 ## 0. 文件与负责人（写 scope 互不重叠）
@@ -9,11 +9,12 @@
 | 文件 | 全局名（浏览器） | 负责人 | 说明 |
 |---|---|---|---|
 | `gd.site.core.js` | `GDSite` | Lead | 站点规则引擎：牌 id/牌型/压牌/回放/expandState/protobuf/记牌器/走法生成/贡牌 |
+| `gd.site.esp.js` | `GDSiteESP` | Lead | 透视数据（纯函数）：从 expandState 派生其他三家手牌、牌面排序、炸弹/同花顺预警、汇总；不联网、不 hook WebSocket |
 | `gd.site.ai.js` | `GDSiteAI` | Lead | 本地启发式：候选评分 + suggest |
 | `gd.site.remote.js` | `GDSiteRemote` | deepseek-dev | DeepSeek 请求构造 + 调用适配（复用父目录 `../gd.deepseek.js`） |
 | `gd.site.ui.js` | `GDSiteUI` | ui-dev | 面板 DOM + 设置弹窗 + 帮助（纯 UI，不碰 fiber/引擎） |
 | `userscript.body.js` | —（`HQ.registerGame`） | Lead | 页面桥接：读 fiber → 解码 → 渲染 → 点击出牌；`window.__gdAI` 调试接口 |
-| `build.js` / `README.md` / `gd.test.js` / `gd.site.core.test.js` / `gd.site.ai.test.js` | — | Lead | 打包/文档/聚合测试/单测 |
+| `build.js` / `README.md` / `gd.test.js` / `gd.site.core.test.js` / `gd.site.esp.test.js` / `gd.site.ai.test.js` | — | Lead | 打包/文档/聚合测试/单测 |
 | `gd.site.remote.test.js` | — | deepseek-dev | 远端模块单测（mock fetch，禁联网） |
 | `gd.site.ui.test.js`（可选） | — | ui-dev | UI 纯函数/静态断言 |
 | `gd.site.verify.test.js` + `_fixture*.{html,js}` | — | verifier | 独立黑盒验收（引擎性质 + 假 DOM/假 fiber 端到端） |
@@ -26,7 +27,7 @@
   else root.GDSite = api;
 })(typeof self !== 'undefined' ? self : this, function () { 'use strict'; ... return api; });
 ```
-打包顺序（`build.js` 的 modules 数组）：`../gd.deepseek.js`（全局 `GDDeepSeek`）→ `gd.site.core.js` → `gd.site.ai.js` → `gd.site.remote.js` → `gd.site.ui.js`，body=`userscript.body.js`，epilogue=`HQ.mountStandalone();`，输出 `掼蛋AI助手.user.js`（build-lib 固定 `@match https://game.hullqin.cn/*`、`@grant none`、`@author Eve`）。
+打包顺序（`build.js` 的 modules 数组）：`../gd.deepseek.js`（全局 `GDDeepSeek`）→ `gd.site.core.js` → `gd.site.esp.js` → `gd.site.ai.js` → `gd.site.remote.js` → `gd.site.ui.js`，body=`userscript.body.js`，epilogue=`HQ.mountStandalone();`，输出 `掼蛋AI助手.user.js`（build-lib 固定 `@match https://game.hullqin.cn/*`、`@grant none`、`@author Eve`）。
 
 ## 1. 站点数据模型（逆向结论，权威）
 
@@ -201,6 +202,28 @@ Play 对象（所有模块统一）：
 ```
 座位名（相对）：`我=mySeat`、`下家=mySeat%4+1`、`对家=mySeat<=2?mySeat+2:mySeat-2`、`上家=mySeat+3-4*(mySeat>1?...)` 用取模统一实现；队友 = 同奇偶。
 
+## 2.5 透视数据 `GDSiteESP`（Lead 实现）
+
+数据源（逆向结论，见 §1.3 / §1.4）：服务端广播的 `DDZGameData.cardPositionList` 含全部 108 张的归属（`owner = v & 7`，1..4），页面只为「自己」渲染手牌是 UI 的选择，客户端**没有**任何脱敏逻辑；fiber 的 `game.data` 就是服务端原文。因此透视 **不 hook WebSocket、不改任何网络请求**，只用 `GDSite.expandState` 已派生的 `playerCardLists[1..4]` / `playerRestCardCounts` 渲染其他三家手牌；开关关闭时 body 不把透视手牌数据放进 snapshot（面板拿不到牌面）。
+
+导出（浏览器全局 `GDSiteESP` / Node `module.exports`）：
+```
+VERSION
+buildXray(expanded, mySeat) -> {
+  ok, reason:'ok'|'no-data'|'no-cards'|'partial'|'not-seated',
+  level, levelText, wildText, mySeat, partnerSeat,
+  seats:[{ seat, name:'下家'|'对家'|'上家', isPartner, count,
+           cards:[{ id, text, suit, rank, red, isLevel, isWild, isJoker, order }],
+           bombs:[{ kind:'fourJokers'|'sameRank'|'straightFlush', size, rank, label, power }],
+           wildCount, unavailable }],
+  warnings:string[], totalCards, bombCount }
+bombsOf(cards, level) -> {bombs, wildCount}   // 保守统计：四大天王 / 同点≥4 / 同花顺（含 A2345）；配牌只补缺张
+sortCards(cards, level) -> number[]           // 等级降序 → 相对花色 → id（站点同款 order）
+cardInfo(id, level) -> {…}                    // 单张牌面与高亮标记
+summaryOf(xray) -> string                     // 面板底部「可见 N 张 · 炸弹 N 个 · 逢人配 N 张」
+```
+约束：纯函数、不读 DOM / fiber、不联网；`power` 与引擎炸弹链一致（四大天王 99、同花顺 5.5、n 张 4..8）。UI 侧只在 `settings.xray === true` 时渲染「👁 透视 · 对手手牌」区块；开关默认 **关**，写 `localStorage['gdSiteAI.settings'].xray`。观战（`mySeat=0`）或无对局数据时返回 `reason:'not-seated'|'no-data'`，面板只显示提示、不展示牌面。
+
 ## 3. 本地 AI `GDSiteAI`（Lead 实现）
 ```
 handSummary(hand, level) -> {size, bombs, wilds, levelCards, playsEstimate}
@@ -232,7 +255,7 @@ async testConnection(config, fetchImpl?) -> {ok, message, model?}
 `GDSiteUI.create(container, opts) -> {root, handle, update(snapshot), setSettings(settings), toast(msg), openSettings(), destroy()}`
 `container` 是 body 创建的 fixed 容器；`handle` 返回标题栏元素（供 `HQ.makeDraggable`）。
 
-`opts` 回调（body 提供）：`{onLocalSuggest, onDeepSeekSuggest, onAdopt, onPass, onTribute, onReturn, onUndo?, onNextRound?, onSaveSettings(settings), onTestConnection(settings)->Promise<{ok,message}>, onOpenHelp?}`。
+`opts` 回调（body 提供）：`{onLocalSuggest, onDeepSeekSuggest, onAdopt, onPass, onTribute, onReturn, onUndo?, onNextRound?, onToggleXray(enabled), onSaveSettings(settings), onTestConnection(settings)->Promise<{ok,message}>, onOpenHelp?}`。
 
 `update(snapshot)`，snapshot 结构（body 每 tick 生成）：
 ```
@@ -245,11 +268,13 @@ async testConnection(config, fetchImpl?) -> {ok, message, model?}
   history:[{seatName, text}],   // 最近 3 条
   suggestion:null | { source:'local'|'deepseek', action:'play'|'pass', name, cardsText, desc, reason, error?, candidatesText?:string[] },
   tribute:null | { mode:'tribute'|'return', fromName, toName, candidatesText, suggestText },
-  busy:boolean, auto:boolean, settings:{hasKey:boolean, model:string} }
+  busy:boolean, auto:boolean, settings:{hasKey:boolean, model:string, xray:boolean},
+  xray:null | { enabled:boolean, level, levelText, wildText, mySeat, reason, seats:[GDSiteESP.buildXray().seats], warnings:string[], totalCards, bombCount } }
 ```
 UI 要求：
 - 宽度约 260px，深色圆角面板，与 `hullqin斗地主/userscript.body.js` 面板风格一致；标题栏 `🃏 掼蛋 AI 助手`（可加 `级牌 X · 逢人配 ♥X` 徽标）。
 - 分区：① 记牌器（大王/小王/A/K/Q/J/10/9/8/7/6/5/4/3/2 网格，显示剩余张数；级牌、逢人配高亮；0 张变灰）② 我的信息（27 张 / 炸弹 / 逢人配 / 预计手数）③ 牌桌（我/下家/对家/上家剩余张数、当前牌权、上一手）④ 建议区（来源徽标 本地/DeepSeek、建议牌型+牌面、理由、候选列表可折叠）⑤ 操作按钮：`💡 本地建议`、`🌐 DeepSeek 建议`、`⚡ 采用并出牌`、`🃏 不出`；进贡/还贡阶段改为 `📤 采纳进贡` / `确认进贡`（按钮行为回调 body 处理）⑥ 设置/帮助按钮 + 自动托管开关。
+- 透视区块（默认 **关**，紧随记牌器之后）：标题 `👁 透视 · 对手手牌` + 开关按钮（`透视：关` / `透视：开`）；开启后按「下家 / 对家 / 上家」三块展示手牌（点数降序、级牌金底、逢人配紫底、红牌红字、王靛底）、每块剩余张数、炸弹/同花顺/四大天王预警与底部汇总「可见 N 张 · 炸弹 N 个 · 逢人配 N 张」；关闭时该区块收起、不渲染任何别家牌面。点击开关回调 `onToggleXray(enabled)`（缺省回退 `onSaveSettings`）。
 - 设置弹窗（可用 `position:fixed` overlay 或面板内联展开，二选一，自包含）：API Key（type=password）、Base URL（默认 `https://api.deepseek.com`）、模型（`deepseek-chat`/`deepseek-reasoner`，可用 input+datalist）、temperature（0.2）、超时 ms（30000）、`保存`、`测试连接`、`清除 Key`；`onSaveSettings` 保存后回读 `setSettings`。**绝不显示完整 Key 明文**（已填则 placeholder 显示掩码）。
 - 帮助：快捷键/功能/规则口径/隐私说明（Key 只存本机 localStorage，不写日志）。
 - 文案全部中文；无 CDN、无外部字体；不污染站点全局（class 前缀 `hqgd-`）。
@@ -257,6 +282,7 @@ UI 要求：
 
 ## 6. body 桥接（Lead 实现）
 - `readGame()`：按 §1.7 读 props → decode → `raw.rule!==2` 返回 `{guandan:false}`；否则 `expandState(raw)` → `{guandan:true, expanded, send, room}`。
+- `xrayView(game)`：`GDSiteESP.buildXray(game.expanded, mySeat)`；仅当 `settings.xray===true` 时把 `seats / cards` 放进 snapshot，否则返回 `{enabled:false, seats:[]}`（关闭后 UI 根本拿不到别家牌面）。`onToggleXray(enabled)` → `saveSettings({xray})` + 立即 `renderTick()`；`settings.xray` 与 Key 同存 `localStorage['gdSiteAI.settings']`。
 - tick（`HQ.registerGame({id:'ddz', name:'掼蛋', icon:'🃏', route:/\/ddz/, interval:550, mount, tick})`，注意 `mountStandalone` 会按 route 挂载；**必须兼容斗地主页面**：非掼蛋时面板显示提示）。
 - 出牌动作：`playCards(cards)`：先反选已选中的牌（遍历 `.ddz-my-poker`，点击 `style.filter` 含 `brightness(0.8)` 的）→ 逐张点击目标牌（`HQ.clickEl`，间隔 30ms）→ sleep 150ms → 点「出牌」按钮（`textContent` 含 `出牌`，排除「不出」）→ sleep 300ms → 校验 tick 状态变化。
 - 不出：点「不出」按钮。进贡：点「确认进贡」（站点已自动预选）；还贡：先点击候选牌，再点「确认还贡」。
@@ -265,14 +291,16 @@ UI 要求：
 - 设置存储：`HQ.loadSettings('gdSiteAI.settings', DEFAULTS_SETTINGS)` / `HQ.saveSettings`。
 
 ## 7. 测试与验收
-- Node：`node gd.test.js` 依次 spawn 跑 `gd.site.core.test.js`、`gd.site.ai.test.js`、`gd.site.remote.test.js`、`gd.site.verify.test.js`，解析 `PASS n / FAIL m`，汇总，失败 exit 1；环境 node 绝对路径 `C:\Users\Administrator\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\node\bin\node.exe`（无 npm；cwd 中文路径）。
+- Node：`node gd.test.js` 依次 spawn 跑 `gd.site.core.test.js`、`gd.site.esp.test.js`、`gd.site.ai.test.js`、`gd.site.remote.test.js`、`gd.site.ui.test.js`、`gd.site.verify.test.js`，解析 `PASS n / FAIL m`，汇总，失败 exit 1；当前 6/6 套件共 2564 断言（引擎 225 · 透视 103 · 本地 AI 902 · 远端 293 · UI 256 · 黑盒 785）。环境 node 绝对路径 `C:\Users\Administrator\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\node\bin\node.exe`（无 npm；cwd 中文路径）。
+- 透视单测必须覆盖：牌 id → 牌面（含 53/54 与第二副 107/108 的大小王）、排序（等级/花色/id）、四大天王 / 同点炸弹 / 同花顺（含 A2345、配牌补缺）、buildXray 的 `not-seated / no-data / no-cards / partial / ok` 分支、与 `GDSite.expandState` 的集成（合成 raw → 四家手牌数量与牌 id 一致）、不修改入参。
 - 所有测试**禁止联网**（远端模块用注入 fetchImpl/mock）。
 - 引擎测试必须覆盖：牌 id/花色/点数/逢人配、全部牌型解释（含逢人配、A 当 1）、大小与炸弹链、回放（出牌/过牌/三过清墩/出完同伴领出）、expandState（tribute/return/play/finish、rankList、resistInfo、roundResult、队友#风）、protobuf encode/decode 往返、记牌器、genMoves 合法性（随机 200 局面：每个候选 cards⊆hand、bestCode 合法/能压、去重）。
-- 端到端夹具（verifier）：`_fixture.html` + `_fixture.setup.js` + `_fixture.test.js`：构造假 React fiber（元素属性 `__reactFiber$test` 指向 `{memoizedProps:{room:{position:2,playerList:[...]}, game:{data:GDSite.encodeGameData(rawState)}, send:fn}, return:{memoizedProps:{...同}, return:null}}`）+ 手牌 DOM + 按钮 DOM（记录点击）；先加载 `gd.site.core.js` 用于编码，再加载构建产物 `掼蛋AI助手.user.js`，断言：面板渲染、记牌器数字、本地建议合法、点击「采用并出牌」确实点中了对应牌与出牌按钮、DeepSeek 无 Key 回退本地、设置保存 localStorage、控制台无未捕获错误。用 Edge headless `--headless=new --disable-gpu --virtual-time-budget=20000 --dump-dom` 跑，解析 `<pre id="fixture-result">` 的 `PASS n / FAIL m`。
+- 端到端夹具（verifier）：`_fixture.html` + `_fixture.setup.js` + `_fixture.test.js`：构造假 React fiber（元素属性 `__reactFiber$test` 指向 `{memoizedProps:{room:{position:2,playerList:[...]}, game:{data:GDSite.encodeGameData(rawState)}, send:fn}, return:{memoizedProps:{...同}, return:null}}`）+ 手牌 DOM + 按钮 DOM（记录点击）；先加载 `gd.site.core.js` 用于编码，再加载构建产物 `掼蛋AI助手.user.js`，断言：面板渲染、记牌器数字、透视默认关闭 / 点击开启后三家手牌与 81 张牌面 / 开关持久化到 localStorage / 关闭后不再下发手牌数据、本地建议合法、点击「采用并出牌」确实点中了对应牌与出牌按钮、DeepSeek 无 Key 回退本地、设置保存 localStorage、控制台无未捕获错误（共 88 项）。用 Edge headless `--headless=new --disable-gpu --virtual-time-budget=25000 --dump-dom` 跑，解析 `<pre id="fixture-result">` 的 `PASS n / FAIL m`。
 - 完成后 build 产物静态断言：header 含 `@match https://game.hullqin.cn/*`，模块顺序（GDSite 定义在 GDSiteAI/GDSiteRemote/GDSiteUI 之前）、末尾 `HQ.mountStandalone();`、无 `http://` CDN 引用。
 
 ## 8. 约束
 - 纯前端、无构建依赖（只用 node 内置模块）；不引入 npm 包。
 - 中文 UTF-8、代码注释中文；文件新建，勿改父目录已交付文件（`gd.deepseek.js` 仅引用不修改）。
 - API Key 只存 localStorage；日志/错误/UI 不打印完整 Key；不向任何第三方发送数据（只有 DeepSeek 官方 API，且用户主动点「DeepSeek 建议」时）。
+- 透视数据只在本机渲染（来自 fiber 已解码的本局状态），**不上传、不写日志、不埋点**；开关默认关闭，由用户自行开启并承担使用后果与站点规则风险。
 - 娱乐辅助，遵守站点规则与用户自身账号安全；不自动参与真实对局以外的用途。

@@ -174,6 +174,43 @@
     ok(seatRows.length > 0 && /我/.test(text(seatRows[0])), '第一个座位行标「我」');
     ok(seatRows.length > 2 && /队友/.test(text(seatRows[2])), '对家座位行标「队友」');
 
+    /* ---------- 4.5) 透视：默认关闭 → 开 → 三家手牌/预警/持久化 → 关 ---------- */
+    var xrayToggle = findButton(panel(), '透视：关');
+    ok(!!xrayToggle, '面板含透视开关且默认关闭（「透视：关」）');
+    ok(!dump().snapshot.xray.enabled, '默认 snapshot.xray.enabled=false（不渲染别家手牌）');
+    eq(document.querySelectorAll('.hqgd-xray-seat').length, 0, '关闭时不渲染透视座位块');
+    if (xrayToggle) {
+      click(xrayToggle);
+      var xOn = await until(function () { return findButton(panel(), '透视：开'); }, 5000, '透视开关打开');
+      ok(!!xOn, '点击后开关变为「透视：开」');
+      var xdata = await until(function () {
+        var d = dump();
+        return (d && d.snapshot && d.snapshot.xray && d.snapshot.xray.enabled && d.snapshot.xray.seats.length === 3)
+          ? d.snapshot.xray : null;
+      }, 8000, '透视数据生成');
+      ok(!!xdata, '开启后 snapshot.xray 含其他三家数据');
+      if (xdata) {
+        ok(xdata.seats.every(function (s) { return s.seat !== 2; }), '透视数据不含我（座位 2）');
+        var xseat3 = xdata.seats.filter(function (s) { return s.seat === 3; })[0];
+        ok(!!xseat3 && xseat3.count === 27, '下家（座位 3）显示 27 张');
+        ok(!!xseat3 && xseat3.cards.length === 27, '下家 27 张牌面全部可读（透视成功）');
+        eq(xdata.totalCards, 81, '透视总可见 81 张（三家 × 27）');
+        eq(document.querySelectorAll('.hqgd-xray-seat').length, 3, '面板渲染 3 个透视座位块');
+        eq(document.querySelectorAll('.hqgd-xray-chip').length, 81, '面板渲染 81 张透视牌');
+        var storedXray = null;
+        try { storedXray = JSON.parse(window.localStorage.getItem('gdSiteAI.settings')); } catch (e) { storedXray = null; }
+        eq(storedXray && storedXray.xray, true, '透视开关写入 localStorage（xray=true）');
+      }
+      click(findButton(panel(), '透视：开'));
+      await until(function () { return findButton(panel(), '透视：关'); }, 5000, '透视开关关闭');
+      var offX = dump().snapshot.xray;
+      ok(offX && offX.enabled === false && offX.seats.length === 0, '关闭后 snapshot.xray 清空（不再下发手牌数据）');
+      eq(document.querySelectorAll('.hqgd-xray-seat').length, 0, '关闭后面板不再渲染透视座位块');
+      var storedOff = null;
+      try { storedOff = JSON.parse(window.localStorage.getItem('gdSiteAI.settings')); } catch (e) { storedOff = null; }
+      eq(storedOff && storedOff.xray, false, '关闭写入 localStorage（xray=false）');
+    }
+
     /* ---------- 5) 自动本地建议：合法、⊆手牌、出自 genMoves ---------- */
     var sugReady = await until(function () {
       var d = dump();

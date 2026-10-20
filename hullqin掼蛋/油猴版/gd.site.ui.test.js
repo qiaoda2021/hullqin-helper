@@ -334,6 +334,8 @@ function testStatic() {
   includes('静态：模型选项 deepseek-reasoner', src, 'deepseek-reasoner');
   includes('静态：测试连接文案', src, '测试连接');
   includes('静态：清除 Key 文案', src, '清除 Key');
+  includes('静态：透视开关文案', src, '透视：关');
+  includes('静态：透视隐私提示', src, '透视会破坏游戏公平性');
 }
 
 /* ============================================================
@@ -384,6 +386,22 @@ function testPure() {
   eq('纯函数：normalizeSnapshot(null) 默认模型', n0.settings.model, 'deepseek-chat');
   eq('纯函数：normalizeSnapshot(null) 默认 BaseURL', n0.settings.baseUrl, 'https://api.deepseek.com');
   eq('纯函数：normalizeSnapshot(null) suggestion', n0.suggestion, null);
+  ok('纯函数：normalizeSnapshot(null) 透视默认关闭', n0.xray.enabled === false && n0.xray.seats.length === 0);
+  ok('纯函数：normalizeSnapshot(null) settings.xray=false', n0.settings.xray === false);
+
+  const nx = I.normXray({
+    enabled: true,
+    seats: [{ seat: 2, name: '下家', cards: [{ id: 1, text: 'A' }, null], bombs: [{ label: '炸弹' }] }, 'bad'],
+    warnings: ['有炸弹', 3, ''],
+    totalCards: 1,
+    bombCount: 1,
+  });
+  ok('纯函数：normXray 开关透传', nx.enabled === true);
+  eq('纯函数：normXray 非法座位过滤/容错', nx.seats.length, 2);
+  eq('纯函数：normXray 非法牌过滤', nx.seats[0].cards.length, 1);
+  eq('纯函数：normXray 炸弹归一化', nx.seats[0].bombs[0].label, '炸弹');
+  eq('纯函数：normXray 预警只留字符串', nx.warnings, ['有炸弹']);
+  eq('纯函数：normXray 计数透传', nx.totalCards + nx.bombCount, 2);
 
   const n1 = I.normalizeSnapshot({
     visible: false,
@@ -432,6 +450,7 @@ async function testDom() {
     onUndo: function () { calls.push('undo'); },
     onNextRound: function () { calls.push('next'); },
     onToggleAuto: function (v) { calls.push('auto:' + v); },
+    onToggleXray: function (v) { calls.push('xray:' + v); },
     onSaveSettings: function (st) {
       calls.push('save:' + st.model + ':' + (st.apiKey || '') + ':' + (st.clearKey ? 'clear' : ''));
     },
@@ -546,6 +565,52 @@ async function testDom() {
     const autoBtn2 = findByText(ui.root, '🤖');
     ok('DOM：snapshot.auto=false 后取消高亮', autoBtn2 && !hasClass(autoBtn2, 'hqgd-on'));
   }
+
+  /* --- 透视开关 --- */
+  const xraySnapshot = makeSnapshot({
+    xray: {
+      enabled: true,
+      seats: [
+        {
+          seat: 2, name: '下家', isPartner: false, count: 3,
+          cards: [
+            { id: 55, text: '♥2', red: true, isLevel: true, isWild: true },
+            { id: 1, text: '♦A', red: false, isLevel: false, isWild: false },
+            { id: 107, text: '大王', red: true, isLevel: false, isWild: false, isJoker: true },
+          ],
+          bombs: [{ kind: 'natural', size: 4, label: '4 张 A', power: 4 }],
+          wildCount: 1, unavailable: false,
+        },
+        { seat: 3, name: '对家', isPartner: true, count: 0, cards: [], bombs: [], wildCount: 0, unavailable: false },
+        { seat: 4, name: '上家', isPartner: false, count: 0, cards: [], bombs: [], wildCount: 0, unavailable: true },
+      ],
+      warnings: ['下家 有 1 个炸弹'],
+      totalCards: 3,
+      bombCount: 1,
+    },
+  });
+  ui.update(xraySnapshot);
+  const xrayToggle = findByText(ui.root, '透视：开');
+  ok('DOM：透视开关（开）存在', !!xrayToggle);
+  ok('DOM：透视开关高亮', !!xrayToggle && hasClass(xrayToggle, 'hqgd-on'));
+  includes('DOM：透视显示对手座位', textOf(ui.root), '下家 · 2号位');
+  includes('DOM：透视手牌张数', textOf(ui.root), '3 张');
+  includes('DOM：透视炸弹预警标签', textOf(ui.root), '4 张 A');
+  includes('DOM：透视未就绪提示', textOf(ui.root), '未就绪');
+  includes('DOM：透视已出完提示', textOf(ui.root), '已出完');
+  includes('DOM：透视汇总', textOf(ui.root), '可见 3 张 · 炸弹 1 个');
+  includes('DOM：透视手牌含大王', textOf(ui.root), '大王');
+  ok('DOM：透视手牌含逢人配样式', !!findAll(ui.root, function (n) { return hasClass(n, 'hqgd-xray-wild'); }).length);
+  calls.length = 0;
+  if (xrayToggle) xrayToggle.click();
+  ok('DOM：透视关闭回调', calls.indexOf('xray:false') >= 0);
+  ok('DOM：透视按钮切换为关', !!findByText(ui.root, '透视：关'));
+  ok('DOM：关闭后不再渲染手牌', textOf(ui.root).indexOf('♦A') < 0 || textOf(ui.root).indexOf('下家 · 2号位') < 0);
+
+  // 直接以 snapshot 关闭（body 为准）
+  ui.update(makeSnapshot({ xray: { enabled: false, seats: [], warnings: [], totalCards: 0, bombCount: 0 } }));
+  ok('DOM：snapshot 透视关闭后不显示手牌', textOf(ui.root).indexOf('下家 · 2号位') < 0);
+  ok('DOM：snapshot 透视关闭后按钮为关', !!findByText(ui.root, '透视：关'));
 
   /* --- toast --- */
   ui.toast('测试提示', 'error');

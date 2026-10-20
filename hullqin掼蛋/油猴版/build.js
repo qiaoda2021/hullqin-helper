@@ -19,12 +19,13 @@ const prevKey = fs.existsSync(OUT_FILE) ? readHardcodedKey(fs.readFileSync(OUT_F
 buildUserScript({
   name: '掼蛋 AI 助手（game.hullqin.cn）',
   namespace: 'guandan-ai-helper',
-  version: '1.0.0',
-  description: '桌游合集掼蛋的 AI 助手：📋记牌器 + 💡出牌提示（本地启发式）+ 🌐DeepSeek 建议 + 🤖自动托管；牌型/回放/进贡还贡规则 1:1 逆向自游戏源码；仅在掼蛋玩法（rule=2）显示。朋友间娱乐使用。',
+  version: '1.1.0',
+  description: '桌游合集掼蛋的 AI 助手：📋记牌器 + 👁透视（可开关，查看三家手牌与炸弹预警）+ 💡出牌提示（本地启发式）+ 🌐DeepSeek 建议 + 🤖自动托管；牌型/回放/进贡还贡规则 1:1 逆向自游戏源码；仅在掼蛋玩法（rule=2）显示。朋友间娱乐使用。',
   connects: ['api.deepseek.com'],
   modules: [
     path.join(__dirname, '..', 'gd.deepseek.js'),
     path.join(__dirname, 'gd.site.core.js'),
+    path.join(__dirname, 'gd.site.esp.js'),
     path.join(__dirname, 'gd.site.ai.js'),
     path.join(__dirname, 'gd.site.remote.js'),
     path.join(__dirname, 'gd.site.ui.js'),
